@@ -1,0 +1,164 @@
+const CustomRole = require('../models/CustomRole');
+const Department = require('../models/Department');
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+const { PERMISSION_KEYS, hasPermission } = require('../utils/permissions');
+const allowedPermissions = [...PERMISSION_KEYS];
+
+const DEFAULT_ROLES = [
+  { name: 'Manager', code: 'MANAGER', description: 'Department manager.' },
+  { name: 'HR', code: 'HR', description: 'Human resources.' }
+];
+
+async function ensureDefaultRoles(branchId, departmentId, createdBy) {
+  for (const role of DEFAULT_ROLES) {
+    try {
+      await CustomRole.updateOne(
+        { branchId, departmentId, code: role.code },
+        { $setOnInsert: { ...role, branchId, departmentId, createdBy } },
+        { upsert: true }
+      );
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+    }
+  }
+}
+
+async function list(req, res) {
+  if (req.user.role !== 'SUPER_ADMIN' && (req.user.role !== 'BRANCH_ADMIN' || !hasPermission(req.user, 'role.create')))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to view branch roles.', code: 'FORBIDDEN' });
+
+  const filter = { isDelete: { $ne: true } };
+
+  if (req.user.role === 'SUPER_ADMIN') {
+    filter.branchId = { $ne: null };
+  } else {
+    filter.branchId = req.user.branchId;
+  }
+
+  // NEW: department filter (query se aa sakta hai)
+  if (req.query.departmentId) {
+    // validate department belongs to branch (non-super-admin)
+    if (req.user.role !== 'SUPER_ADMIN') {
+      const dept = await Department.findOne({
+        _id: req.query.departmentId,
+        branchId: req.user.branchId,
+        isDelete: { $ne: true }
+      }).select('_id');
+      if (!dept)
+        return sendError(res, { statusCode: 400, message: 'Invalid department.', code: 'INVALID_DEPARTMENT' });
+    }
+    filter.departmentId = req.query.departmentId;
+
+    // default roles ensure karo us department ke liye
+    if (req.user.role === 'BRANCH_ADMIN' && req.user.branchId)
+      await ensureDefaultRoles(req.user.branchId, req.query.departmentId, req.user.id);
+  }
+
+  const rows = await CustomRole.find(filter)
+    .select('-permissions')
+    .populate('branchId', 'name branchCode')
+    .populate('departmentId', 'name code')
+    .populate('createdBy', 'firstName lastName role')
+    .sort({ name: 1 })
+    .lean();
+
+  return sendSuccess(res, { message: 'Roles loaded.', data: rows });
+}
+
+async function create(req, res) {
+  if (req.user.role !== 'BRANCH_ADMIN' || !hasPermission(req.user, 'role.create'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to create branch roles.', code: 'FORBIDDEN' });
+
+  const { name, description = '', departmentId } = req.body || {};
+
+  if (!departmentId)
+    return sendError(res, { statusCode: 400, message: 'Department is required to create a role.', code: 'VALIDATION_ERROR' });
+
+  if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 80)
+    return sendError(res, { statusCode: 400, message: 'Role name must be between 2 and 80 characters.', code: 'VALIDATION_ERROR' });
+
+  if (typeof description !== 'string' || description.length > 500)
+    return sendError(res, { statusCode: 400, message: 'Role description cannot exceed 500 characters.', code: 'VALIDATION_ERROR' });
+
+  // department validate karo
+  const dept = await Department.findOne({
+    _id: departmentId,
+    branchId: req.user.branchId,
+    isDelete: { $ne: true }
+  }).select('_id');
+  if (!dept)
+    return sendError(res, { statusCode: 400, message: 'Selected department is invalid.', code: 'INVALID_DEPARTMENT' });
+
+  const code = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-+$/g, '');
+  if (!code)
+    return sendError(res, { statusCode: 400, message: 'Role name must include letters or numbers.', code: 'VALIDATION_ERROR' });
+
+  try {
+    const role = await CustomRole.create({
+      branchId: req.user.branchId,
+      departmentId: dept._id,      // NEW
+      name: name.trim(),
+      code,
+      description: description.trim(),
+      createdBy: req.user.id
+    });
+    return sendSuccess(res, { statusCode: 201, message: 'Department role created.', data: role });
+  } catch (error) {
+    if (error.code === 11000)
+      return sendError(res, { statusCode: 409, message: 'A role with this name already exists in this department.', code: 'DUPLICATE_ROLE' });
+    throw error;
+  }
+}
+
+async function update(req, res) {
+  if (req.user.role !== 'BRANCH_ADMIN' || !hasPermission(req.user, 'role.create'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to edit branch roles.', code: 'FORBIDDEN' });
+
+  const role = await CustomRole.findOne({
+    _id: req.params.id,
+    branchId: req.user.branchId,
+    isDelete: { $ne: true }
+  });
+  if (!role) return sendError(res, { statusCode: 404, message: 'Role not found in your branch.', code: 'ROLE_NOT_FOUND' });
+
+  const { name, description } = req.body || {};
+  if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 80)
+    return sendError(res, { statusCode: 400, message: 'Role name must be between 2 and 80 characters.', code: 'VALIDATION_ERROR' });
+  if (description !== undefined && (typeof description !== 'string' || description.length > 500))
+    return sendError(res, { statusCode: 400, message: 'Role description cannot exceed 500 characters.', code: 'VALIDATION_ERROR' });
+
+  const code = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-+$/g, '');
+  if (!code) return sendError(res, { statusCode: 400, message: 'Role name must include letters or numbers.', code: 'VALIDATION_ERROR' });
+
+  role.name = name.trim();
+  role.code = code;
+  if (description !== undefined) role.description = description.trim();
+
+  try {
+    await role.save();
+    return sendSuccess(res, { message: 'Role updated.', data: role });
+  } catch (error) {
+    if (error.code === 11000)
+      return sendError(res, { statusCode: 409, message: 'A role with this name already exists in this department.', code: 'DUPLICATE_ROLE' });
+    throw error;
+  }
+}
+
+async function archive(req, res) {
+  if (req.user.role !== 'BRANCH_ADMIN' || !hasPermission(req.user, 'role.create'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to archive branch roles.', code: 'FORBIDDEN' });
+
+  const role = await CustomRole.findOne({
+    _id: req.params.id,
+    branchId: req.user.branchId,
+    isDelete: { $ne: true }
+  });
+  if (!role) return sendError(res, { statusCode: 404, message: 'Role not found in your branch.', code: 'ROLE_NOT_FOUND' });
+
+  role.isDelete = true;
+  role.archivedAt = new Date();
+  await role.save();
+  return sendSuccess(res, { message: 'Role archived.', data: role });
+}
+
+module.exports = { list, create, update, archive, allowedPermissions };

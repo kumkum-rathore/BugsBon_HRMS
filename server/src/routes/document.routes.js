@@ -1,0 +1,8 @@
+const router=require('express').Router();
+const auth=require('../middleware/authenticate');
+const c=require('../controllers/document.controller');router.use(auth);
+router.get('/',c.list);
+router.post('/',c.create);
+router.patch('/:id/review',c.verify);
+router.delete('/:id', c.remove);
+module.exports=router;
