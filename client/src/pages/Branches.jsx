@@ -156,7 +156,7 @@ export default function Branches({
         postalCode: address.postalCode || '',
         country: address.country || 'India',
       },
-      contactName: branch.contactName || '',
+      // contactName: branch.contactName || '',
       contactEmail: branch.contactEmail || '',
       contactPhone: branch.contactPhone || '',
       timezone: branch.timezone || 'Asia/Kolkata',
@@ -256,7 +256,7 @@ export default function Branches({
         postalCode: address.postalCode || '',
         country: address.country || 'India',
       },
-      contactName: branch.contactName || '',
+      // contactName: branch.contactName || '',
       contactEmail: branch.contactEmail || '',
       contactPhone: branch.contactPhone || '',
       timezone: branch.timezone || 'Asia/Kolkata',
@@ -303,9 +303,9 @@ export default function Branches({
       return 'Enter valid longitude and latitude coordinates.';
     }
 
-    if (formData.contactName.trim().length < 2) {
-      return 'Contact name is required.';
-    }
+    // if (formData.contactName.trim().length < 2) {
+    //   return 'Contact name is required.';
+    // }
 
     // Contact email is OPTIONAL — only validate when provided
     const email = formData.contactEmail.trim();
@@ -638,7 +638,7 @@ export default function Branches({
 
                       <td>
                         <div>
-                          <strong>{branch.contactName || 'No contact name'}</strong><br></br>
+                          {/* <strong>{branch.contactName || 'No contact name'}</strong><br></br> */}
                           <span className="table-secondary">{branch.contactEmail || 'No contact email'}</span>
                           <span className="table-secondary">
                             {branch.contactPhone || 'No phone'}
@@ -826,16 +826,16 @@ export default function Branches({
                     />
                   </label>
 
-                  <label>
+                  {/* <label>
                     Contact name *
-                    <input
+                    {/* <input
                       name="contactName"
                       value={formData.contactName}
                       onChange={handleChange}
                       required
                       minLength={2}
-                    />
-                  </label>
+                    /> */}
+                  {/* </label> */} 
 
                   <label>
                     Contact email
@@ -997,11 +997,11 @@ export default function Branches({
                     value={selectedBranch.branchCode}
                   />
 
-                  <BranchDetail
+                  {/* <BranchDetail
                     icon={Users}
                     label="Contact Name"
                     value={selectedBranch.contactName}
-                  />
+                  /> */}
 
                   <BranchDetail
                     icon={Mail}
