@@ -78,6 +78,9 @@ const [showDeptModal, setShowDeptModal] = useState(false);
 const [deptForm, setDeptForm] = useState({ name: '', description: '' });
 const [deptSaving, setDeptSaving] = useState(false);
 const [localDepartments, setLocalDepartments] = useState([]);
+const [branchFilter, setBranchFilter] = useState('ALL');
+const [branchOptions, setBranchOptions] = useState([]);
+const [branchFilterLoading, setBranchFilterLoading] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -109,6 +112,31 @@ const [localDepartments, setLocalDepartments] = useState([]);
   useEffect(() => {
     setEmployeeRows(employees);
   }, [employees]);
+  useEffect(() => {
+  if (user?.role !== 'SUPER_ADMIN') {
+    setBranchOptions([]);
+    setBranchFilter('ALL');
+    return undefined;
+  }
+
+  let active = true;
+
+  api('/branches?limit=100')
+    .then(result => {
+      if (active) {
+        setBranchOptions(Array.isArray(result.data) ? result.data : []);
+      }
+    })
+    .catch(err => {
+      if (active) {
+        setError(err.message || 'Unable to load branches.');
+      }
+    });
+
+  return () => {
+    active = false;
+  };
+}, [user?.role]);
 
   const departments = [
     ...new Map(
@@ -179,6 +207,35 @@ const [localDepartments, setLocalDepartments] = useState([]);
       (statusFilter === 'ALL' || employee.status === statusFilter)
     );
   });
+
+async function handleBranchFilterChange(branchId) {
+  setBranchFilter(branchId);
+  setError('');
+
+  if (branchId === 'ALL') {
+    if (onRefresh) {
+      await onRefresh();
+    } else {
+      setEmployeeRows(employees);
+    }
+    return;
+  }
+
+  setBranchFilterLoading(true);
+
+  try {
+    const result = await api(
+      `/employees?branchId=${encodeURIComponent(branchId)}&limit=100`
+    );
+
+    setEmployeeRows(Array.isArray(result.data) ? result.data : []);
+  } catch (err) {
+    setError(err.message || 'Unable to filter employees by branch.');
+  } finally {
+    setBranchFilterLoading(false);
+  }
+}
+
 
   function getEmployeeId(employee) {
     return employee?.id || employee?._id;
@@ -698,6 +755,25 @@ const [localDepartments, setLocalDepartments] = useState([]);
             placeholder="Search employee name"
             aria-label="Search employee name"
           />
+          {user?.role === 'SUPER_ADMIN' && (
+  <select
+    value={branchFilter}
+    onChange={event => handleBranchFilterChange(event.target.value)}
+    aria-label="Filter employees by branch"
+    disabled={branchFilterLoading}
+  >
+    <option value="ALL">All branches</option>
+
+    {branchOptions.map(branch => (
+      <option
+        key={branch._id || branch.id}
+        value={branch._id || branch.id}
+      >
+        {branch.name} ({branch.branchCode})
+      </option>
+    ))}
+  </select>
+)}
           <select
             value={departmentFilter}
             onChange={event => setDepartmentFilter(event.target.value)}
@@ -736,8 +812,8 @@ const [localDepartments, setLocalDepartments] = useState([]);
           </select>
         </div>
 
-        {loading ? (
-          <LoadingRows />
+{loading || branchFilterLoading ? (
+            <LoadingRows />
         ) : filtered.length > 0 ? (
           <div className="table-scroll">
             <table>

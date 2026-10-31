@@ -14,7 +14,7 @@ const schema = new mongoose.Schema({
     coordinates: { type: [Number], required: true, validate: { validator(v) { return Array.isArray(v) && v.length === 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && v[0] >= -180 && v[0] <= 180 && v[1] >= -90 && v[1] <= 90; }, message: 'Coordinates must be [longitude, latitude].' } }
   },
   geofenceRadiusMeters: { type: Number, default: 100, min: 20, max: 2000, required: true },
-  contactName: { type: String, trim: true, default: '', maxlength: 160 },
+  // contactName: { type: String, trim: true, default: '', maxlength: 160 },
   contactEmail: { type: String, trim: true, lowercase: true, default: null, maxlength: 254 },
   contactPhone: { type: String, trim: true, default: null, maxlength: 30 },
   timezone: { type: String, trim: true, default: 'Asia/Kolkata', maxlength: 100 },

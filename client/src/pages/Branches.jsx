@@ -38,6 +38,25 @@ import {
 
 const ADMIN_PERMISSION_OPTIONS = PERMISSION_OPTIONS;
 
+const EMPTY_FORM = {
+  name: '',
+  address: {
+    line1: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    country: 'India',
+  },
+  contactName: '',
+  contactEmail: '',
+  contactPhone: '',
+  timezone: 'Asia/Kolkata',
+  status: 'ACTIVE',
+  geofenceRadiusMeters: 100,
+  longitude: '',
+  latitude: '',
+};
+
 export default function Branches({
   branches = [],
   loading = false,
@@ -58,24 +77,7 @@ export default function Branches({
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-  const [formData, setFormData] = useState({
-    name: '',
-    address: {
-      line1: '',
-      city: '',
-      state: '',
-      postalCode: '',
-      country: 'India',
-    },
-    contactName: '',
-    contactEmail: '',
-    contactPhone: '',
-    timezone: 'Asia/Kolkata',
-    status: 'ACTIVE',
-    geofenceRadiusMeters: 100,
-    longitude: '',
-    latitude: '',
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   useEffect(() => {
     setBranchRows(branches);
@@ -234,10 +236,35 @@ export default function Branches({
     });
   }
 
-  // FIX: moved out of togglePermission so it's accessible in JSX
   function setAllAdminPermissions() {
     const allPermissions = ADMIN_PERMISSION_OPTIONS.map(([permission]) => permission);
     setAdminPermissions(allPermissions);
+  }
+
+  function resetFormFromBranch(branch) {
+    if (!branch) return;
+
+    const address = branch.address || {};
+    const coordinates = branch.officeLocation?.coordinates || [];
+
+    setFormData({
+      name: branch.name || '',
+      address: {
+        line1: address.line1 || '',
+        city: address.city || '',
+        state: address.state || '',
+        postalCode: address.postalCode || '',
+        country: address.country || 'India',
+      },
+      contactName: branch.contactName || '',
+      contactEmail: branch.contactEmail || '',
+      contactPhone: branch.contactPhone || '',
+      timezone: branch.timezone || 'Asia/Kolkata',
+      status: branch.status || 'ACTIVE',
+      geofenceRadiusMeters: branch.geofenceRadiusMeters ?? 100,
+      longitude: coordinates[0] ?? '',
+      latitude: coordinates[1] ?? '',
+    });
   }
 
   function validateForm() {
@@ -248,9 +275,10 @@ export default function Branches({
     if (
       !formData.address.line1.trim() ||
       !formData.address.city.trim() ||
-      !formData.address.state.trim()
+      !formData.address.state.trim() ||
+      !formData.address.country.trim()
     ) {
-      return 'Address line 1, city and state are required.';
+      return 'Address line 1, city, state and country are required.';
     }
 
     const radius = Number(formData.geofenceRadiusMeters);
@@ -275,8 +303,21 @@ export default function Branches({
       return 'Enter valid longitude and latitude coordinates.';
     }
 
-    if (formData.contactName.trim().length < 2) return 'Contact name is required.';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.contactEmail.trim())) return 'A valid branch contact email is required.';
+    if (formData.contactName.trim().length < 2) {
+      return 'Contact name is required.';
+    }
+
+    // Contact email is OPTIONAL — only validate when provided
+    const email = formData.contactEmail.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return 'Enter a valid contact email or leave it blank.';
+    }
+
+    // Contact phone is OPTIONAL — only validate when provided
+    const phone = formData.contactPhone.trim();
+    if (phone && !/^\d{10}$/.test(phone)) {
+      return 'Contact phone must contain exactly 10 digits or be left blank.';
+    }
 
     return '';
   }
@@ -307,6 +348,8 @@ export default function Branches({
     setError('');
     setSuccess('');
 
+    // Send empty string (not null) for optional fields.
+    // Backend normalizes '' → null before saving.
     const payload = {
       name: formData.name.trim(),
       address: {
@@ -316,9 +359,9 @@ export default function Branches({
         postalCode: formData.address.postalCode.trim(),
         country: formData.address.country.trim() || 'India',
       },
-      contactName: formData.contactName.trim(),
-      contactEmail: formData.contactEmail.trim() || null,
-      contactPhone: formData.contactPhone.trim() || null,
+      // contactName: formData.contactName.trim(),
+      contactEmail: formData.contactEmail.trim(),
+      contactPhone: formData.contactPhone.trim(),
       timezone: formData.timezone.trim() || 'Asia/Kolkata',
       status: formData.status,
       geofenceRadiusMeters: Number(formData.geofenceRadiusMeters),
@@ -368,6 +411,10 @@ export default function Branches({
           ? updatedAdmin.permissions
           : adminPermissions
       );
+
+      // Sync form data with the server response so editing again shows
+      // the canonical values (e.g. null → '')
+      resetFormFromBranch(updatedBranch);
 
       setEditing(false);
       setSuccess(result.message || 'Branch updated successfully.');
@@ -487,7 +534,9 @@ export default function Branches({
 
     return searchText.includes((query || '').toLowerCase());
   });
+
   const branchStates = getStatesForCountry(formData.address.country);
+
   return (
     <>
       <div className="panel data-panel">
@@ -778,9 +827,16 @@ export default function Branches({
                   </label>
 
                   <label>
-                    Contact name
-                    <input name="contactName" value={formData.contactName} onChange={handleChange} required minLength={2} />
+                    Contact name *
+                    <input
+                      name="contactName"
+                      value={formData.contactName}
+                      onChange={handleChange}
+                      required
+                      minLength={2}
+                    />
                   </label>
+
                   <label>
                     Contact email
                     <input
@@ -788,19 +844,17 @@ export default function Branches({
                       name="contactEmail"
                       value={formData.contactEmail}
                       onChange={handleChange}
-                      required
                     />
                   </label>
 
-               <label>
-  Contact phone *
-  <PhoneInput
-    name="contactPhone"
-    value={formData.contactPhone}
-    onChange={handleChange}
-    required
-  />
-</label>
+                  <label>
+                    Contact phone
+                    <PhoneInput
+                      name="contactPhone"
+                      value={formData.contactPhone}
+                      onChange={handleChange}
+                    />
+                  </label>
 
                   <label>
                     Geofence radius (metres)
@@ -912,6 +966,7 @@ export default function Branches({
                     onClick={() => {
                       setEditing(false);
                       setError('');
+                      resetFormFromBranch(selectedBranch);
                       setAdminPermissions(
                         Array.isArray(getAdmin(selectedBranch)?.permissions)
                           ? getAdmin(selectedBranch).permissions
