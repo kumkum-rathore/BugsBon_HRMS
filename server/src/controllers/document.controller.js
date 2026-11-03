@@ -4,6 +4,8 @@ const User = require('../models/User');
 const mongoose = require('mongoose');
 const { sendSuccess, sendError } = require('../utils/apiResponse');
 const { hasPermission } = require('../utils/permissions');
+// 🆕 FIX: Import cloudinary for delete operation
+const { cloudinary } = require('../middleware/upload');
 
 async function list(req, res) {
   if (req.user.role === 'SUPER_ADMIN')
@@ -108,8 +110,16 @@ async function list(req, res) {
     ];
   }
 
-  const activeUserIds = await User.find({ branchId: req.user.branchId, isDelete: { $ne: true }, status: 'ACTIVE' }).distinct('_id');
-  filter.$and = [...(filter.$and || []), { $or: [{ projectId: { $ne: null } }, { userId: { $in: activeUserIds } }] }];
+  const activeUserIds = await User.find({
+    branchId: req.user.branchId,
+    isDelete: { $ne: true },
+    status: 'ACTIVE',
+  }).distinct('_id');
+
+  filter.$and = [
+    ...(filter.$and || []),
+    { $or: [{ projectId: { $ne: null } }, { userId: { $in: activeUserIds } }] },
+  ];
 
   const rows = await Document.find(filter)
     .populate('userId', 'firstName lastName employeeCode')
@@ -158,31 +168,62 @@ async function create(req, res) {
         message: 'Select a valid project.',
         code: 'INVALID_PROJECT',
       });
+
     project = await Project.findOne({
       _id: first.projectId,
       branchId: req.user.branchId,
     });
+
     if (!project)
       return sendError(res, {
         statusCode: 400,
         message: 'Project is outside your permitted scope.',
         code: 'INVALID_PROJECT',
       });
+
     if (first.userId && String(first.userId) !== String(req.user.id))
       return sendError(res, {
         statusCode: 400,
         message: 'Project documents are attributed to their uploader.',
         code: 'INVALID_EMPLOYEE',
       });
+
+    // ✅ FIX: include status + isDelete in select
     targetUser = await User.findOne({
       _id: req.user.id,
       branchId: req.user.branchId,
-    }).select('_id branchId');
+    }).select('_id branchId status isDelete');
+
+    // 🆕 Also validate project uploader is active
+    if (
+      !targetUser ||
+      targetUser.isDelete === true ||
+      targetUser.status !== 'ACTIVE'
+    )
+      return sendError(res, {
+        statusCode: 400,
+        message: 'Uploader account is outside your permitted scope.',
+        code: 'INVALID_EMPLOYEE',
+      });
   } else {
     const targetId = first.userId || req.user.id;
-    targetUser = await User.findById(targetId).select('_id branchId');
+
+    if (!mongoose.isValidObjectId(targetId))
+      return sendError(res, {
+        statusCode: 400,
+        message: 'Select a valid employee.',
+        code: 'INVALID_EMPLOYEE',
+      });
+
+    // ✅ FIX: include status + isDelete so the checks below actually work
+    targetUser = await User.findById(targetId).select(
+      '_id branchId status isDelete role'
+    );
+
     if (
-      !targetUser || targetUser.isDelete === true || targetUser.status !== 'ACTIVE' ||
+      !targetUser ||
+      targetUser.isDelete === true ||
+      targetUser.status !== 'ACTIVE' ||
       (req.user.role !== 'SUPER_ADMIN' &&
         String(targetUser.branchId) !== String(req.user.branchId))
     )
@@ -191,7 +232,11 @@ async function create(req, res) {
         message: 'Employee is outside your permitted scope.',
         code: 'INVALID_EMPLOYEE',
       });
-    if (String(targetId) !== String(req.user.id) && req.user.role === 'SUPER_ADMIN')
+
+    if (
+      String(targetId) !== String(req.user.id) &&
+      req.user.role === 'SUPER_ADMIN'
+    )
       return sendError(res, {
         statusCode: 403,
         message: 'You can only upload your own documents.',
@@ -207,8 +252,13 @@ async function create(req, res) {
     });
 
   const allowedCategories = [
-    'IDENTITY', 'EDUCATION', 'EXPERIENCE',
-    'CONTRACT', 'PAYSLIP', 'PROJECT', 'OTHER',
+    'IDENTITY',
+    'EDUCATION',
+    'EXPERIENCE',
+    'CONTRACT',
+    'PAYSLIP',
+    'PROJECT',
+    'OTHER',
   ];
 
   // 🆕 resource types: image / video / raw
@@ -230,8 +280,7 @@ async function create(req, res) {
       fileUrl,
     } = item;
 
-    const keyOk =
-      typeof storageKey === 'string' && keyRegex.test(storageKey);
+    const keyOk = typeof storageKey === 'string' && keyRegex.test(storageKey);
 
     if (
       typeof title !== 'string' ||
@@ -249,6 +298,7 @@ async function create(req, res) {
       });
       continue;
     }
+
     if (!allowedCategories.includes(category)) {
       errors.push({ index: i, message: 'Invalid document category.' });
       continue;
@@ -297,6 +347,7 @@ async function verify(req, res) {
     });
 
   const { status, reviewNote = '' } = req.body || {};
+
   if (!['VERIFIED', 'REJECTED'].includes(status))
     return sendError(res, {
       statusCode: 400,
@@ -305,24 +356,28 @@ async function verify(req, res) {
     });
 
   const row = await Document.findById(req.params.id);
+
   if (!row)
     return sendError(res, {
       statusCode: 404,
       message: 'Document not found.',
       code: 'NOT_FOUND',
     });
+
   if (!req.user.branchId || String(row.branchId) !== String(req.user.branchId))
     return sendError(res, {
       statusCode: 403,
       message: 'Branch access denied.',
       code: 'BRANCH_ACCESS_DENIED',
     });
+
   if (!['PENDING', 'SUBMITTED'].includes(row.status))
     return sendError(res, {
       statusCode: 409,
       message: 'Only pending documents can be reviewed.',
       code: 'DOCUMENT_ALREADY_REVIEWED',
     });
+
   if (typeof reviewNote !== 'string' || reviewNote.length > 1000)
     return sendError(res, {
       statusCode: 400,
@@ -344,37 +399,38 @@ async function verify(req, res) {
   });
 }
 
-
-
-//  * 🆕 Delete a document
-//  * Allowed for: document.upload OR document.verify permission holders
-//  * Scoped to same branch (except SUPER_ADMIN, but SUPER_ADMIN can't access docs anyway)
-//  * Also removes the file from Cloudinary (best-effort).
-//  */
+/**
+ * 🆕 Delete a document
+ * Allowed for: document.upload OR document.verify permission holders
+ * Scoped to same branch (except SUPER_ADMIN, but SUPER_ADMIN can't access docs anyway)
+ * Also removes the file from Cloudinary (best-effort).
+ */
 async function remove(req, res) {
   const canDelete =
     hasPermission(req.user, 'document.upload') ||
     hasPermission(req.user, 'document.verify');
+
   if (!canDelete)
     return sendError(res, {
       statusCode: 403,
       message: 'You do not have permission to delete documents.',
-      code: 'FORBIDDEN'
+      code: 'FORBIDDEN',
     });
 
   if (!mongoose.isValidObjectId(req.params.id))
     return sendError(res, {
       statusCode: 400,
       message: 'Invalid document id.',
-      code: 'VALIDATION_ERROR'
+      code: 'VALIDATION_ERROR',
     });
 
   const doc = await Document.findById(req.params.id);
+
   if (!doc)
     return sendError(res, {
       statusCode: 404,
       message: 'Document not found.',
-      code: 'NOT_FOUND'
+      code: 'NOT_FOUND',
     });
 
   // Branch scoping
@@ -382,7 +438,7 @@ async function remove(req, res) {
     return sendError(res, {
       statusCode: 403,
       message: 'Branch access denied.',
-      code: 'BRANCH_ACCESS_DENIED'
+      code: 'BRANCH_ACCESS_DENIED',
     });
 
   // Best-effort: delete the actual file from Cloudinary
@@ -393,7 +449,7 @@ async function remove(req, res) {
         await cloudinary.uploader.destroy(publicId, {
           resource_type: resourceType || 'raw',
           type: 'authenticated',
-          invalidate: true
+          invalidate: true,
         });
       }
     } catch (err) {
@@ -406,9 +462,8 @@ async function remove(req, res) {
 
   return sendSuccess(res, {
     message: 'Document deleted successfully.',
-    data: { id: doc._id }
+    data: { id: doc._id },
   });
 }
 
 module.exports = { list, create, verify, remove };
-

@@ -19,9 +19,16 @@ function getFormat(fileName, publicId) {
  * Generate a short-lived signed URL for a private Cloudinary asset.
  * resourceType MUST match how it was uploaded (image / video / raw).
  */
-function buildSignedUrl(publicId, resourceType = 'raw', format = 'bin', expiresInSeconds = 300) {
+function buildSignedUrl(
+  publicId,
+  resourceType = 'raw',
+  format = 'bin',
+  expiresInSeconds = 300
+) {
   const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
-  const type = ['image', 'video', 'raw'].includes(resourceType) ? resourceType : 'raw';
+  const type = ['image', 'video', 'raw'].includes(resourceType)
+    ? resourceType
+    : 'raw';
 
   return cloudinary.utils.private_download_url(publicId, format, {
     resource_type: type,
@@ -35,7 +42,7 @@ function buildSignedUrl(publicId, resourceType = 'raw', format = 'bin', expiresI
  * Resolve + authorize a private file by its storage key ("publicId|resourceType").
  */
 async function resolvePrivateFile(req) {
-const key = String(req.params[0] || '');
+  const key = String(req.params[0] || '');
   if (!key) return null;
 
   const parts = key.split('|');
@@ -49,7 +56,8 @@ const key = String(req.params[0] || '');
 
   if (doc) {
     fileName = doc.fileName || fileName;
-    const ownerMatch = doc.userId && String(doc.userId) === String(req.user.id);
+    const ownerMatch =
+      doc.userId && String(doc.userId) === String(req.user.id);
     const branchMatch =
       req.user.branchId &&
       doc.branchId &&
@@ -118,31 +126,64 @@ async function upload(req, res) {
       code: 'FILE_REQUIRED',
     });
 
-  const mapped = files.map(file => {
-    // 🆕 cloudinary-storage returns `path` = secure_url, `filename` = public_id
-    //    fallback: use mimetype to derive correct resource type
-    const publicId = file.public_id || file.filename || file.path;
+  // ✅ FIX: Resolve publicId properly, reject if missing.
+  // cloudinary-storage sets:
+  //   file.public_id  → Cloudinary public ID (correct)
+  //   file.filename   → same as public_id (correct)
+  //   file.path       → secure_url (NOT a public ID — must NOT be used as fallback!)
+  const mapped = [];
+  const errors = [];
+
+  files.forEach((file, index) => {
+    const publicId = file.public_id || file.filename;
+
+    if (!publicId) {
+      errors.push({
+        index,
+        fileName: file.originalname,
+        message:
+          'Storage did not return a public ID. File may not have been uploaded correctly.',
+      });
+      return;
+    }
+
+    // Sanitize: strip any accidental pipe chars so storageKey stays parseable
+    const safePublicId = String(publicId).replace(/\|/g, '');
+
     const resourceType =
       file.resource_type || getResourceType(file.mimetype) || 'raw';
-    const storageKey = `${publicId}|${resourceType}`;
 
-    return {
+    const storageKey = `${safePublicId}|${resourceType}`;
+
+    mapped.push({
       storageKey,
-      publicId,
+      publicId: safePublicId,
       resourceType,
       fileName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
-      fileUrl: file.secure_url || file.url || file.path,
+      fileUrl: file.secure_url || file.url || file.path || '',
       downloadEndpoint: `/api/v1/uploads/${encodeURIComponent(storageKey)}`,
       previewEndpoint: `/api/v1/uploads/${encodeURIComponent(storageKey)}/preview`,
-    };
+    });
   });
+
+  // If some files failed but others succeeded, return partial success with meta
+  if (!mapped.length) {
+    return sendError(res, {
+      statusCode: 500,
+      message:
+        'Storage did not return valid public IDs for the uploaded files.',
+      code: 'STORAGE_ERROR',
+      details: errors,
+    });
+  }
 
   return sendSuccess(res, {
     statusCode: 201,
     message: `${mapped.length} file(s) stored privately on Cloudinary. Save the returned metadata with a document or task submission.`,
     data: mapped,
+    meta: errors.length ? { failed: errors } : undefined,
   });
 }
 
@@ -151,6 +192,7 @@ async function upload(req, res) {
  */
 async function proxyFile(req, res) {
   const file = await resolvePrivateFile(req);
+
   if (!file)
     return sendError(res, {
       statusCode: 404,

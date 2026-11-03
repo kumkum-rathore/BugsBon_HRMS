@@ -193,8 +193,8 @@ async function create(req, res) {
   const assignedPermissions = [...new Set(permissions ?? [])];
 
   // 🔍 DEBUG LOGS — remove once fixed
-  console.log('🔵 Body permissions sent:', assignedPermissions);
-  console.log('🔵 User permissions from JWT:', req.user.permissions);
+  // console.log('🔵 Body permissions sent:', assignedPermissions);
+  // console.log('🔵 User permissions from JWT:', req.user.permissions);
   const missing = assignedPermissions.filter(p => !req.user.permissions?.includes(p));
   console.log('🔵 Missing permissions:', missing);
 

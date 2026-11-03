@@ -396,15 +396,34 @@ function Modal({ type, user, onClose, onSuccess }) {
             ? uploadRes.data
             : [uploadRes.data];
 
+          // ✅ FIX: Match uploaded file to original row by fileName (order-safe)
+          // instead of relying on array index `i`.
           await Promise.all(
-            uploadedList.map((uploaded, i) => {
-              const doc = allDocs[i];
+            uploadedList.map(uploaded => {
+              const doc = allDocs.find(
+                d => d.file && d.file.name === uploaded.fileName
+              );
+
+              // If we can't match by name (e.g. Cloudinary renamed it),
+              // fall back to the first unused row with matching size.
+              const matchedDoc = doc || allDocs.find(
+                d => d.file && d.file.size === uploaded.size
+              );
+
+              if (!matchedDoc) {
+                console.warn(
+                  'Could not match uploaded file to document row:',
+                  uploaded.fileName
+                );
+                return Promise.resolve();
+              }
+
               return api('/documents', {
                 method: 'POST',
                 body: JSON.stringify({
                   userId: result.data.id,
-                  category: doc.category || 'OTHER',
-                  title: doc.title || uploaded.fileName,
+                  category: matchedDoc.category || 'OTHER',
+                  title: matchedDoc.title || uploaded.fileName,
                   fileName: uploaded.fileName,
                   storageKey: uploaded.storageKey,
                   mimeType: uploaded.mimeType,

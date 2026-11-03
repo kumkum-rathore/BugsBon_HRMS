@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import {
   Users,
@@ -34,6 +33,9 @@ import { PERMISSION_OPTIONS } from '../utils/permissions.js';
 
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
+
+// Roles that must NEVER appear in the employee directory
+const EXCLUDED_FROM_DIRECTORY = ['BRANCH_ADMIN', 'SUPER_ADMIN'];
 
 // --------------------------------------------------
 // HELPERS
@@ -78,6 +80,14 @@ function getRoleDepartmentId(role) {
   );
 }
 
+// --------------------------------------------------
+// EMPLOYEE ID HELPER
+// --------------------------------------------------
+
+function getEmployeeId(employee) {
+  return employee?.id || employee?._id;
+}
+
 export default function Employees({
   employees = [],
   loading = false,
@@ -91,7 +101,12 @@ export default function Employees({
   // EMPLOYEE STATES
   // --------------------------------------------------
 
-  const [employeeRows, setEmployeeRows] = useState(employees);
+  const [employeeRows, setEmployeeRows] = useState(() =>
+    (employees || []).filter(
+      emp => !EXCLUDED_FROM_DIRECTORY.includes(emp?.role)
+    )
+  );
+
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
   const [editing, setEditing] = useState(false);
@@ -178,16 +193,32 @@ export default function Employees({
       String(getEmployeeId(employee)) === String(user.id)
     );
 
-  function getEmployeeId(employee) {
-    return employee?.id || employee?._id;
-  }
-
   // --------------------------------------------------
   // UPDATE EMPLOYEE ROWS
+  // Always strip out Branch Admins / Super Admins here
+  // so they can never leak into the directory.
   // --------------------------------------------------
 
   useEffect(() => {
-    setEmployeeRows(employees);
+    const directoryOnly = (employees || []).filter(
+      emp => !EXCLUDED_FROM_DIRECTORY.includes(emp?.role)
+    );
+
+    setEmployeeRows(directoryOnly);
+
+    // If the currently selected employee is no longer valid
+    // (e.g. became a Branch Admin), close the modal.
+    setSelectedEmployee(previous => {
+      if (!previous) return previous;
+
+      const stillExists = directoryOnly.some(
+        emp =>
+          String(getEmployeeId(emp)) ===
+          String(getEmployeeId(previous))
+      );
+
+      return stillExists ? previous : null;
+    });
   }, [employees]);
 
   // --------------------------------------------------
@@ -320,6 +351,11 @@ export default function Employees({
   // --------------------------------------------------
 
   const filtered = employeeRows.filter(employee => {
+    // Defensive: skip anything that shouldn't be here.
+    if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) {
+      return false;
+    }
+
     const searchText = [
       employee.firstName,
       employee.lastName,
@@ -460,6 +496,11 @@ export default function Employees({
     startEditing = false,
     confirmDeactivate = false
   ) {
+    // Defensive: never open a Branch Admin / Super Admin
+    if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) {
+      return;
+    }
+
     setSelectedEmployee(employee);
 
     setFormData({
@@ -729,9 +770,20 @@ export default function Employees({
       setNewDocRows([newDocRow('IDENTITY')]);
 
       // UPDATE EMPLOYEE LIST
+      // Skip if the updated employee somehow became a Branch Admin
+      const becomesExcluded = EXCLUDED_FROM_DIRECTORY.includes(
+        updatedEmployee?.role
+      );
 
-      setEmployeeRows(previous =>
-        previous.map(employee =>
+      setEmployeeRows(previous => {
+        if (becomesExcluded) {
+          return previous.filter(
+            employee =>
+              String(getEmployeeId(employee)) !== String(id)
+          );
+        }
+
+        return previous.map(employee =>
           String(getEmployeeId(employee)) === String(id)
             ? {
                 ...employee,
@@ -742,8 +794,19 @@ export default function Employees({
                   employee.customRole
               }
             : employee
-        )
-      );
+        );
+      });
+
+      if (becomesExcluded) {
+        setSelectedEmployee(null);
+        setEditing(false);
+        setDeleting(false);
+        setSuccess(
+          result.message || 'Employee updated successfully.'
+        );
+        if (onRefresh) await onRefresh();
+        return;
+      }
 
       setSelectedEmployee(previous => ({
         ...previous,
@@ -922,6 +985,8 @@ export default function Employees({
   async function archiveEmployee(employee) {
     if (!canEditEmployee(employee)) return;
 
+    if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) return;
+
     const id = getEmployeeId(employee);
 
     if (
@@ -978,6 +1043,8 @@ export default function Employees({
 
   async function reactivateEmployee(employee) {
     if (!canEditEmployee(employee)) return;
+
+    if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) return;
 
     const id = getEmployeeId(employee);
 
@@ -1330,7 +1397,7 @@ export default function Employees({
 
       {/* EMPLOYEE DETAILS MODAL */}
 
-      {selectedEmployee && (
+      {selectedEmployee && !EXCLUDED_FROM_DIRECTORY.includes(selectedEmployee.role) && (
         <div
           className="employee-overlay"
           onMouseDown={event => {
