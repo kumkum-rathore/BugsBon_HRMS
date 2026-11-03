@@ -253,7 +253,7 @@ async function create(req, res) {
     typeof admin.email !== 'string' ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(admin.email.trim()) ||
     typeof admin.password !== 'string' ||
-    admin.password.length < 8 ||   // was 12 — change back if policy requires
+    admin.password.length < 6 ||   // was 12 — change back if policy requires
     admin.password.length > 128
   ) {
     return sendError(res, {

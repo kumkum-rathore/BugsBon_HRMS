@@ -8,6 +8,7 @@ const { sendSuccess, sendError } = require('../utils/apiResponse');
 const { hasPermission } = require('../utils/permissions');
 const { sendMeetingInvitations } = require('../services/email.service');
 const MAX_HOLIDAY_DAYS = 60; // safety cap
+
 function isBranchAdmin(req) {
   return hasPermission(req.user, 'calendar.manage') && !!req.user.branchId;
 }
@@ -197,6 +198,149 @@ async function createMeeting(req, res) {
   });
 }
 
+async function updateMeeting(req, res) {
+  if (!isBranchAdmin(req))
+    return sendError(res, {
+      statusCode: 403,
+      message: 'You do not have permission to edit branch meetings.',
+      code: 'FORBIDDEN'
+    });
+  if (!mongoose.isValidObjectId(req.params.id))
+    return sendError(res, { statusCode: 404, message: 'Meeting not found.', code: 'NOT_FOUND' });
+
+  const existing = await Meeting.findOne({
+    _id: req.params.id,
+    branchId: req.user.branchId,
+    cancelledAt: null
+  });
+  if (!existing)
+    return sendError(res, { statusCode: 404, message: 'Meeting not found in your branch.', code: 'NOT_FOUND' });
+
+  const {
+    title, description = '', date, time, startsAt, endsAt,
+    attendeeIds, mode = 'OFFLINE', meetLink = '', location = ''
+  } = req.body || {};
+
+  const start = typeof startsAt === 'string' ? new Date(startsAt) : null;
+  const suppliedEnd = typeof endsAt === 'string' && endsAt.trim() ? new Date(endsAt) : null;
+  const end = suppliedEnd && !Number.isNaN(suppliedEnd.getTime())
+    ? suppliedEnd
+    : (start && !Number.isNaN(start.getTime())
+        ? new Date(start.getTime() + 60 * 60 * 1000)
+        : null);
+
+  // Allow editing past-meeting metadata, but only enforce "10 min from now" for future meetings
+  const startInFuture = start && start.getTime() >= Date.now() + 10 * 60 * 1000;
+  const sameOrOriginalStart = start && existing.startsAt &&
+    Math.abs(start.getTime() - existing.startsAt.getTime()) < 60 * 1000;
+
+  if (
+    typeof title !== 'string' ||
+    title.trim().length < 3 ||
+    title.trim().length > 160 ||
+    typeof description !== 'string' ||
+    description.length > 2000 ||
+    !isValidDateKey(date) ||
+    !/^([01]\d|2[0-3]):[0-5]\d$/.test(time || '') ||
+    !start || Number.isNaN(start.getTime()) ||
+    (!startInFuture && !sameOrOriginalStart) ||
+    !end || Number.isNaN(end.getTime()) || (suppliedEnd && end <= start) ||
+    !['ONLINE', 'OFFLINE'].includes(mode) ||
+    (mode === 'ONLINE' && !/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(\?.*)?$/i.test(String(meetLink).trim())) ||
+    (mode === 'OFFLINE' && String(location).trim().length < 2) ||
+    !Array.isArray(attendeeIds) ||
+    attendeeIds.length < 1 ||
+    attendeeIds.length > 100 ||
+    attendeeIds.some(id => !mongoose.isValidObjectId(id))
+  )
+    return sendError(res, {
+      statusCode: 400,
+      message: 'Provide a valid meeting title, date, time and at least one employee.',
+      code: 'VALIDATION_ERROR'
+    });
+
+  // Admin already excluded on frontend; ensure current user is not validated as employee
+  const selectedIds = [...new Set(attendeeIds.map(String))]
+    .filter(id => id !== String(req.user.id));
+
+  const employees = await User.find({
+    _id: { $in: selectedIds },
+    branchId: req.user.branchId,
+    role: 'EMPLOYEE',
+    status: 'ACTIVE',
+    isDelete: { $ne: true }
+  }).select('_id');
+  if (employees.length !== selectedIds.length)
+    return sendError(res, {
+      statusCode: 400,
+      message: 'All meeting attendees must be active employees in your branch.',
+      code: 'INVALID_ATTENDEES'
+    });
+
+  // Always include current admin in attendees
+  const attendees = [...new Set([...selectedIds, String(req.user.id)])];
+
+  // Reset reminder + email sent flags if time/attendees changed so they get re-notified
+  const timeChanged = !sameOrOriginalStart || (suppliedEnd && existing.endsAt &&
+    Math.abs(end.getTime() - existing.endsAt.getTime()) > 60 * 1000);
+  const attendeesChanged =
+    attendees.length !== existing.attendees.length ||
+    attendees.some(id => !existing.attendees.map(String).includes(id));
+
+  const update = {
+    title: title.trim(),
+    description: description.trim(),
+    date,
+    time,
+    startsAt: start,
+    endsAt: end,
+    mode,
+    meetLink: mode === 'ONLINE' ? String(meetLink).trim() : null,
+    location: mode === 'OFFLINE' ? String(location).trim() : '',
+    reminderAt: new Date(start.getTime() - 10 * 60 * 1000),
+    attendees
+  };
+
+  if (timeChanged) {
+    update.reminderSentAt = null;
+    // Clear old reminders so worker can re-deliver at new time
+    await Notification.deleteMany({ type: 'MEETING_REMINDER', referenceId: existing._id });
+  }
+
+  const meeting = await Meeting.findOneAndUpdate(
+    { _id: existing._id, branchId: req.user.branchId },
+    { $set: update },
+    { new: true }
+  )
+    .populate('attendees', 'firstName lastName email')
+    .populate('createdBy', 'firstName lastName email')
+    .lean();
+
+  // Re-send invitations to newly added attendees (best-effort)
+  let emailMessage = '';
+  if (attendeesChanged) {
+    try {
+      const invitedAttendees = meeting.attendees.filter(p => String(p._id) !== String(req.user.id));
+      const organizer = {
+        name: `${meeting.createdBy?.firstName || ''} ${meeting.createdBy?.lastName || ''}`.trim() || 'Branch Admin',
+        email: meeting.createdBy?.email || process.env.SMTP_USER
+      };
+      const emailResult = await sendMeetingInvitations(meeting, invitedAttendees, organizer);
+      if (!emailResult.skipped) {
+        await Meeting.updateOne({ _id: meeting._id }, { $set: { emailSentAt: new Date() } });
+        emailMessage = ' Updated invitations were emailed.';
+      }
+    } catch (emailError) {
+      console.error('Unable to send updated meeting invitations:', emailError.message);
+    }
+  }
+
+  return sendSuccess(res, {
+    message: `Meeting updated.${emailMessage}`,
+    data: meeting
+  });
+}
+
 async function cancelMeeting(req, res) {
   if (!isBranchAdmin(req))
     return sendError(res, {
@@ -220,7 +364,6 @@ async function cancelMeeting(req, res) {
   });
   return sendSuccess(res, { message: 'Meeting cancelled.', data: { id: meeting._id } });
 }
-
 
 async function createHoliday(req, res) {
   try {
@@ -337,7 +480,6 @@ async function deleteHoliday(req, res) {
   if (!holiday)
     return sendError(res, { statusCode: 404, message: 'Holiday not found in your branch.', code: 'NOT_FOUND' });
 
-  // Agar groupId hai to poora multi-day holiday delete karo
   const filter = holiday.groupId
     ? { branchId: req.user.branchId, groupId: holiday.groupId }
     : { _id: holiday._id, branchId: req.user.branchId };
@@ -455,6 +597,7 @@ async function assignShift(req, res) {
 module.exports = {
   list,
   createMeeting,
+  updateMeeting,
   cancelMeeting,
   createHoliday,
   deleteHoliday,

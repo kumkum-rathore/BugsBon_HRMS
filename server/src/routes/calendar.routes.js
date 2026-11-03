@@ -5,6 +5,7 @@ const controller = require('../controllers/calendar.controller');
 router.use(authenticate);
 router.get('/', controller.list);
 router.post('/meetings', controller.createMeeting);
+router.patch('/meetings/:id', controller.updateMeeting);
 router.delete('/meetings/:id', controller.cancelMeeting);
 router.post('/holidays', controller.createHoliday);
 router.delete('/holidays/:id', controller.deleteHoliday);

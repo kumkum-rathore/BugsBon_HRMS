@@ -12,7 +12,34 @@ const { validatePermissionList, hasPermission } = require('../utils/permissions'
 const { nextBranchCode, previewBranchCode } = require('../utils/codeSequence');
 const { isValidOptionalPhone } = require('../utils/phoneValidation');
 const roles = ['EMPLOYEE'];
-function safe(u) { return { id: u._id, employeeCode: u.employeeCode, firstName: u.firstName, lastName: u.lastName, email: u.email, phone: u.phone, role: u.role, branchId: u.branchId, shiftId: u.shiftId, departmentId: u.departmentId, customRoleId: u.customRoleId, permissions: u.permissions, status: u.status, joiningDate: u.joiningDate, experienceYears: u.experienceYears, experienceSummary: u.experienceSummary, hasPreviousExperience: u.hasPreviousExperience, previousCompanyName: u.previousCompanyName, previousCompanyLeavingDate: u.previousCompanyLeavingDate, previousCompanyLeavingReason: u.previousCompanyLeavingReason, salaryAmount: u.salaryAmount, createdAt: u.createdAt }; }
+
+function safe(u) {
+  return {
+    id: u._id,
+    employeeCode: u.employeeCode,
+    firstName: u.firstName,
+    lastName: u.lastName,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    branchId: u.branchId,
+    shiftId: u.shiftId,
+    departmentId: u.departmentId,
+    customRoleId: u.customRoleId,
+    permissions: u.permissions,
+    status: u.status,
+    joiningDate: u.joiningDate,
+    experienceYears: u.experienceYears,
+    experienceSummary: u.experienceSummary,
+    hasPreviousExperience: u.hasPreviousExperience,
+    previousCompanyName: u.previousCompanyName,
+    previousCompanyLeavingDate: u.previousCompanyLeavingDate,
+    previousCompanyLeavingReason: u.previousCompanyLeavingReason,
+    salaryAmount: u.salaryAmount,
+    createdAt: u.createdAt
+  };
+}
+
 async function previewCode(req, res) {
   if (!hasPermission(req.user, 'employee.create'))
     return sendError(res, { statusCode: 403, message: 'You do not have permission to create employees.', code: 'FORBIDDEN' });
@@ -21,6 +48,7 @@ async function previewCode(req, res) {
     return sendError(res, { statusCode: 400, message: 'Selected branch is unavailable.', code: 'INVALID_BRANCH' });
   return sendSuccess(res, { message: 'Employee code preview loaded.', data: { employeeCode: await previewBranchCode(branch, 'EMP') } });
 }
+
 async function list(req, res) {
   const canAccessDirectory = [
     'employee.view',
@@ -33,7 +61,8 @@ async function list(req, res) {
   ].some(permission => hasPermission(req.user, permission));
   if (!canAccessDirectory)
     return sendError(res, { statusCode: 403, message: 'You do not have permission to view branch employees.', code: 'FORBIDDEN' });
-  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1); const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
   const filter = { isDelete: { $ne: true } };
   if (req.user.role === 'EMPLOYEE' && !req.user.permissions?.some(p => ['employee.view','employee.create','task.assign','task.review','task.view','role.create','employee.salary.manage','calendar.manage','project.manage'].includes(p))) filter._id = req.user.id;
   else if (req.user.role === 'SUPER_ADMIN') { filter.role = { $nin: ['SUPER_ADMIN', 'BRANCH_ADMIN'] }; if (req.query.branchId) filter.branchId = req.query.branchId; }
@@ -42,8 +71,26 @@ async function list(req, res) {
     filter.role = { $ne: 'BRANCH_ADMIN' };
   }
   if (req.query.status && ['INVITED', 'ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(req.query.status)) filter.status = req.query.status;
-  if (req.query.search) { const term = String(req.query.search).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); filter.$or = [{ firstName: new RegExp(term, 'i') }, { lastName: new RegExp(term, 'i') }, { email: new RegExp(term, 'i') }, { employeeCode: new RegExp(term, 'i') }]; }
-  const [users, total] = await Promise.all([User.find(filter).populate('branchId', 'name branchCode').populate('departmentId', 'name code').populate('customRoleId', 'name code').populate('shiftId', 'name startTime endTime graceMinutes').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit), User.countDocuments(filter)]);
+  if (req.query.search) {
+    const term = String(req.query.search).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    filter.$or = [
+      { firstName: new RegExp(term, 'i') },
+      { lastName: new RegExp(term, 'i') },
+      { email: new RegExp(term, 'i') },
+      { employeeCode: new RegExp(term, 'i') }
+    ];
+  }
+  const [users, total] = await Promise.all([
+    User.find(filter)
+      .populate('branchId', 'name branchCode')
+      .populate('departmentId', 'name code')
+      .populate('customRoleId', 'name code')
+      .populate('shiftId', 'name startTime endTime graceMinutes')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    User.countDocuments(filter)
+  ]);
   const data = users.map(u => {
     const item = { ...safe(u), branch: req.user.role === 'SUPER_ADMIN' ? u.branchId : undefined, customRole: u.customRoleId, branchId: u.branchId?._id || u.branchId };
     if (!hasPermission(req.user, 'employee.view') && String(u._id) !== req.user.id) {
@@ -65,14 +112,26 @@ async function list(req, res) {
   });
   return sendSuccess(res, { message: 'Employees loaded.', data, meta: { page, limit, total, pages: Math.ceil(total / limit) } });
 }
+
 async function create(req, res) {
-  if (!hasPermission(req.user, 'employee.create')) return sendError(res, { statusCode: 403, message: 'You do not have permission to create employees.', code: 'FORBIDDEN' });
-  const { firstName, lastName = '', email, password, role = 'EMPLOYEE', phone = null, joiningDate, departmentId = null, customRoleId = null, shiftId, permissions, hasPreviousExperience = false, experienceYears = 0, previousCompanyName = '', previousCompanyLeavingDate, previousCompanyLeavingReason = '', salaryAmount = 0 } = req.body || {};
+  if (!hasPermission(req.user, 'employee.create'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to create employees.', code: 'FORBIDDEN' });
+
+  const {
+    firstName, lastName = '', email, password, role = 'EMPLOYEE', phone = null,
+    joiningDate, departmentId = null, customRoleId = null, shiftId, permissions,
+    hasPreviousExperience = false, experienceYears = 0, previousCompanyName = '',
+    previousCompanyLeavingDate, previousCompanyLeavingReason = '', salaryAmount = 0
+  } = req.body || {};
+
   const errors = [];
   if (typeof firstName !== 'string' || firstName.trim().length < 2) errors.push({ field: 'firstName', message: 'First name must be at least 2 characters.' });
+  if (typeof lastName !== 'string' || lastName.trim().length < 1) errors.push({ field: 'lastName', message: 'Last name is required.' });
   if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push({ field: 'email', message: 'Valid email is required.' });
-  if (typeof password !== 'string' || password.length < 12 || password.length > 128) errors.push({ field: 'password', message: 'Initial password must be 12–128 characters.' });
-  if (!isValidOptionalPhone(phone)) errors.push({ field: 'phone', message: 'Phone must contain exactly 10 digits.' });
+  // ✅ Password: minimum 6 characters (updated message)
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128)
+    errors.push({ field: 'password', message: 'Initial password must be 6–128 characters.' });
+  if (!phone || !isValidOptionalPhone(phone)) errors.push({ field: 'phone', message: 'Phone is required and must contain exactly 10 digits.' });
   if (!roles.includes(role)) errors.push({ field: 'role', message: 'Role is not allowed for employee creation.' });
   if (typeof hasPreviousExperience !== 'boolean') errors.push({ field: 'hasPreviousExperience', message: 'Specify whether the employee has previous work experience.' });
   if (!Number.isFinite(Number(experienceYears)) || Number(experienceYears) < 0 || Number(experienceYears) > 70) errors.push({ field: 'experienceYears', message: 'Experience must be between 0 and 70 years.' });
@@ -94,19 +153,34 @@ async function create(req, res) {
   if (permissions !== undefined && (!validatePermissionList(permissions) || permissions.some(permission => !req.user.permissions?.includes(permission)))) errors.push({ field: 'permissions', message: 'Select only valid permissions granted to your account.' });
   if (!shiftId) errors.push({ field: 'shiftId', message: 'Assign a shift to the employee.' });
   if (role !== 'EMPLOYEE') errors.push({ field: 'role', message: 'Employee base account type must be EMPLOYEE. Use a branch-created custom role for job titles.' });
+
+  const joinedRaw = joiningDate ? new Date(joiningDate) : null;
+  const validJoiningDate =
+    typeof joiningDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(joiningDate) &&
+    joinedRaw &&
+    !Number.isNaN(joinedRaw.getTime()) &&
+    joinedRaw.toISOString().slice(0, 10) === joiningDate &&
+    joiningDate <= new Date().toISOString().slice(0, 10);
+  if (!validJoiningDate) errors.push({ field: 'joiningDate', message: 'Joining date is required and must be a valid date that is not in the future.' });
+
   const targetBranch = req.user.branchId;
   if (role !== 'SUPER_ADMIN' && !targetBranch) errors.push({ field: 'branchId', message: 'A branch is required.' });
   if (errors.length) return sendError(res, { statusCode: 400, message: 'Please correct the employee details.', code: 'VALIDATION_ERROR', details: errors });
+
   const branch = targetBranch ? await Branch.findOne({ _id: targetBranch, status: 'ACTIVE' }).select('_id branchCode') : null;
   if (targetBranch && !branch) return sendError(res, { statusCode: 400, message: 'Selected branch is unavailable.', code: 'INVALID_BRANCH' });
+
   const dept = await Department.findOne({ _id: departmentId, branchId: targetBranch, isDelete: { $ne: true } });
   if (!dept) return sendError(res, { statusCode: 400, message: 'Select an active department from your branch.', code: 'INVALID_DEPARTMENT' });
+
   if (!mongoose.isValidObjectId(shiftId))
     return sendError(res, { statusCode: 400, message: 'Select a valid shift.', code: 'INVALID_SHIFT' });
   const shift = shiftId
     ? await Shift.findOne({ _id: shiftId, branchId: targetBranch }).select('_id')
     : null;
   if (!shift) return sendError(res, { statusCode: 400, message: 'Select a shift created for your branch.', code: 'INVALID_SHIFT' });
+
   let assignedRole = null;
   if (customRoleId) {
     if (!mongoose.isValidObjectId(customRoleId))
@@ -115,49 +189,101 @@ async function create(req, res) {
     if (!assignedRole)
       return sendError(res, { statusCode: 400, message: 'Select a role created for this branch.', code: 'INVALID_ROLE' });
   }
+
   const assignedPermissions = [...new Set(permissions ?? [])];
-  if (assignedPermissions.some(permission => !req.user.permissions?.includes(permission)))
-    return sendError(res, { statusCode: 400, message: 'Selected employee permissions must be granted to your account.', code: 'INVALID_PERMISSIONS' });
+
+  // 🔍 DEBUG LOGS — remove once fixed
+  console.log('🔵 Body permissions sent:', assignedPermissions);
+  console.log('🔵 User permissions from JWT:', req.user.permissions);
+  const missing = assignedPermissions.filter(p => !req.user.permissions?.includes(p));
+  console.log('🔵 Missing permissions:', missing);
+
+  if (missing.length) {
+    return sendError(res, {
+      statusCode: 400,
+      message: `You cannot grant permissions outside your scope: ${missing.join(', ')}. Logout and login again if Super Admin recently granted these to you.`,
+      code: 'INVALID_PERMISSIONS',
+      details: [{ field: 'permissions', missing }]
+    });
+  }
+
   const passwordHash = await bcrypt.hash(password, 12);
+
   try {
-    const joined = joiningDate ? new Date(joiningDate) : new Date();
-    if (Number.isNaN(joined.getTime()) || joined > new Date()) return sendError(res, { statusCode: 400, message: 'Joining date must be a valid date that is not in the future.', code: 'INVALID_JOINING_DATE' });
-      const employeeCode = await nextBranchCode(branch, 'EMP');
-      const user = await User.create({ firstName: firstName.trim(), lastName, email: email.trim().toLowerCase(), passwordHash, role, branchId: targetBranch || null, phone, employeeCode, joiningDate: joined, departmentId: departmentId || null, customRoleId: assignedRole?._id || null, shiftId: shift._id, permissions: assignedPermissions, experienceYears: hasPreviousExperience ? Number(experienceYears) : 0, hasPreviousExperience, previousCompanyName: hasPreviousExperience ? previousCompanyName.trim() : '', previousCompanyLeavingDate: hasPreviousExperience ? new Date(previousCompanyLeavingDate) : null, previousCompanyLeavingReason: hasPreviousExperience ? previousCompanyLeavingReason.trim() : '', salaryAmount: Number(salaryAmount), status: 'ACTIVE' });
-    { const month = `${joined.getFullYear()}-${String(joined.getMonth()+1).padStart(2,'0')}`; try { await Salary.create({ branchId: targetBranch, userId: user._id, month, baseSalary: Number(salaryAmount), createdBy: req.user.id, status: 'DRAFT', notes: 'Initial salary record created during employee onboarding.' }); } catch (salaryError) { await User.findByIdAndDelete(user._id); throw salaryError; } }
+    const joined = new Date(joiningDate);
+    if (Number.isNaN(joined.getTime()) || joined > new Date())
+      return sendError(res, { statusCode: 400, message: 'Joining date must be a valid date that is not in the future.', code: 'INVALID_JOINING_DATE' });
+
+    const employeeCode = await nextBranchCode(branch, 'EMP');
+
+    const user = await User.create({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.trim().toLowerCase(),
+      passwordHash,
+      role,
+      branchId: targetBranch || null,
+      phone,
+      employeeCode,
+      joiningDate: joined,
+      departmentId: departmentId || null,
+      customRoleId: assignedRole?._id || null,
+      shiftId: shift._id,
+      permissions: assignedPermissions,
+      experienceYears: hasPreviousExperience ? Number(experienceYears) : 0,
+      hasPreviousExperience,
+      previousCompanyName: hasPreviousExperience ? previousCompanyName.trim() : '',
+      previousCompanyLeavingDate: hasPreviousExperience ? new Date(previousCompanyLeavingDate) : null,
+      previousCompanyLeavingReason: hasPreviousExperience ? previousCompanyLeavingReason.trim() : '',
+      salaryAmount: Number(salaryAmount),
+      status: 'ACTIVE'
+    });
+
+    {
+      const month = `${joined.getFullYear()}-${String(joined.getMonth() + 1).padStart(2, '0')}`;
+      try {
+        await Salary.create({
+          branchId: targetBranch,
+          userId: user._id,
+          month,
+          baseSalary: Number(salaryAmount),
+          createdBy: req.user.id,
+          status: 'DRAFT',
+          notes: 'Initial salary record created during employee onboarding.'
+        });
+      } catch (salaryError) {
+        await User.findByIdAndDelete(user._id);
+        throw salaryError;
+      }
+    }
+
     return sendSuccess(res, { statusCode: 201, message: 'Employee created with onboarding salary record.', data: safe(user) });
-  } catch (err) { if (err.code === 11000) return sendError(res, { statusCode: 409, message: 'Email or employee code already exists.', code: 'DUPLICATE_RECORD' }); throw err; }
+  } catch (err) {
+    if (err.code === 11000)
+      return sendError(res, { statusCode: 409, message: 'Email or employee code already exists.', code: 'DUPLICATE_RECORD' });
+    throw err;
+  }
 }
 
 async function update(req, res) {
-  if (!hasPermission(req.user, 'employee.update')) return sendError(res, { statusCode: 403, message: 'You do not have permission to update employees.', code: 'FORBIDDEN' });
-  if (req.user.role === 'BRANCH_ADMIN' && String(req.params.id) === String(req.user.id)) return sendError(res, { statusCode: 403, message: 'Branch Admins cannot edit their own profile.', code: 'SELF_PROFILE_EDIT_FORBIDDEN' });
+  if (!hasPermission(req.user, 'employee.update'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to update employees.', code: 'FORBIDDEN' });
+  if (req.user.role === 'BRANCH_ADMIN' && String(req.params.id) === String(req.user.id))
+    return sendError(res, { statusCode: 403, message: 'Branch Admins cannot edit their own profile.', code: 'SELF_PROFILE_EDIT_FORBIDDEN' });
+
   const user = await User.findOne({ _id: req.params.id, branchId: req.user.branchId, isDelete: { $ne: true } });
   if (!user) return sendError(res, { statusCode: 404, message: 'Employee not found in your branch.', code: 'EMPLOYEE_NOT_FOUND' });
 
   const wasActive = user.status === 'ACTIVE';
   const {
-    firstName,
-    lastName,
-    email,
-    status,
-    phone,
-    joiningDate,
-    departmentId,
-    customRoleId,
-    shiftId,
-    salaryAmount,
-    experienceYears,
-    hasPreviousExperience,
-    previousCompanyName,
-    previousCompanyLeavingDate,
-    previousCompanyLeavingReason,
-    experienceSummary,
-    permissions
+    firstName, lastName, email, status, phone, joiningDate, departmentId,
+    customRoleId, shiftId, salaryAmount, experienceYears, hasPreviousExperience,
+    previousCompanyName, previousCompanyLeavingDate, previousCompanyLeavingReason,
+    experienceSummary, permissions
   } = req.body || {};
 
-  // ---------- Basic validation ----------
-  if (!isValidOptionalPhone(phone)) return sendError(res, { statusCode: 400, message: 'Phone must contain exactly 10 digits.', code: 'VALIDATION_ERROR', details: [{ field: 'phone' }] });
+  if (phone !== undefined && (!phone || !isValidOptionalPhone(phone)))
+    return sendError(res, { statusCode: 400, message: 'Phone must contain exactly 10 digits.', code: 'VALIDATION_ERROR', details: [{ field: 'phone' }] });
 
   if (firstName !== undefined) {
     if (typeof firstName !== 'string' || firstName.trim().length < 2 || firstName.trim().length > 80)
@@ -165,8 +291,8 @@ async function update(req, res) {
     user.firstName = firstName.trim();
   }
   if (lastName !== undefined) {
-    if (typeof lastName !== 'string' || lastName.trim().length > 80)
-      return sendError(res, { statusCode: 400, message: 'Last name must be up to 80 characters.', code: 'VALIDATION_ERROR' });
+    if (typeof lastName !== 'string' || lastName.trim().length < 1 || lastName.trim().length > 80)
+      return sendError(res, { statusCode: 400, message: 'Last name is required (up to 80 characters).', code: 'VALIDATION_ERROR' });
     user.lastName = lastName.trim();
   }
   if (email !== undefined) {
@@ -259,25 +385,30 @@ async function update(req, res) {
   try {
     await user.save();
   } catch (err) {
-    if (err.code === 11000) return sendError(res, { statusCode: 409, message: 'Email already exists.', code: 'DUPLICATE_RECORD' });
+    if (err.code === 11000)
+      return sendError(res, { statusCode: 409, message: 'Email already exists.', code: 'DUPLICATE_RECORD' });
     throw err;
   }
 
   if (user.status !== 'ACTIVE') await Project.updateMany({ branchId: user.branchId }, { $pull: { members: user._id } });
   return sendSuccess(res, { message: 'Employee record updated.', data: safe(user) });
 }
+
 async function remove(req, res) {
-  if (!hasPermission(req.user, 'employee.update')) return sendError(res, { statusCode: 403, message: 'You do not have permission to deactivate employees.', code: 'FORBIDDEN' });
+  if (!hasPermission(req.user, 'employee.update'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to deactivate employees.', code: 'FORBIDDEN' });
   const user = await User.findOne({ _id: req.params.id, branchId: req.user.branchId, role: 'EMPLOYEE', isDelete: { $ne: true } });
   if (!user) return sendError(res, { statusCode: 404, message: 'Employee not found in your branch.', code: 'EMPLOYEE_NOT_FOUND' });
-  // Keep HR history intact: deactivate the account rather than physically deleting attendance/salary/task records.
-  user.status = 'INACTIVE'; user.tokenVersion += 1;
+  user.status = 'INACTIVE';
+  user.tokenVersion += 1;
   await user.save();
   await Project.updateMany({ branchId: user.branchId }, { $pull: { members: user._id } });
   return sendSuccess(res, { message: 'Employee deactivated; historical records were retained.', data: safe(user) });
 }
+
 async function archive(req, res) {
-  if (!hasPermission(req.user, 'employee.update')) return sendError(res, { statusCode: 403, message: 'You do not have permission to archive employees.', code: 'FORBIDDEN' });
+  if (!hasPermission(req.user, 'employee.update'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to archive employees.', code: 'FORBIDDEN' });
   const user = await User.findOne({ _id: req.params.id, branchId: req.user.branchId, role: 'EMPLOYEE', isDelete: { $ne: true } });
   if (!user) return sendError(res, { statusCode: 404, message: 'Employee not found in your branch.', code: 'EMPLOYEE_NOT_FOUND' });
   if (user.status === 'ACTIVE') user.tokenVersion += 1;
@@ -288,4 +419,5 @@ async function archive(req, res) {
   await Project.updateMany({ branchId: user.branchId }, { $pull: { members: user._id } });
   return sendSuccess(res, { message: 'Employee archived; historical records were retained.', data: safe(user) });
 }
+
 module.exports = { list, create, update, remove, archive, previewCode };

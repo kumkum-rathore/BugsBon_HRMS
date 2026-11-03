@@ -21,7 +21,6 @@ import {
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
-// 🆕 Factory for a new empty document row
 function newDocRow(defaultCategory = 'IDENTITY') {
   return {
     key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -39,10 +38,8 @@ function Modal({ type, user, onClose, onSuccess }) {
   const [branchCities, setBranchCities] = useState([]);
   const [citiesLoading, setCitiesLoading] = useState(false);
 
-  // 🆕 Dynamic employee document rows
   const [employeeDocRows, setEmployeeDocRows] = useState([newDocRow('IDENTITY')]);
 
-  // 🆕 Inline department creation state
   const [showDeptModal, setShowDeptModal] = useState(false);
   const [deptForm, setDeptForm] = useState({ name: '', description: '' });
   const [deptSaving, setDeptSaving] = useState(false);
@@ -202,7 +199,6 @@ function Modal({ type, user, onClose, onSuccess }) {
       })
     : [];
 
-  // 🆕 Document row helpers
   function addEmployeeDocRow() {
     if (employeeDocRows.length >= MAX_FILES) return;
     setEmployeeDocRows(prev => [...prev, newDocRow(prev[0]?.category || 'IDENTITY')]);
@@ -223,7 +219,6 @@ function Modal({ type, user, onClose, onSuccess }) {
     );
   }
 
-  // 🆕 Inline department creation
   async function createDepartmentInline() {
     const name = deptForm.name.trim();
     if (!name || name.length < 2) {
@@ -253,13 +248,11 @@ function Modal({ type, user, onClose, onSuccess }) {
       const created = res.data;
       const newId = String(created._id || created.id);
 
-      // dropdown में तुरंत दिखे
       setDepartmentOptions(prev => {
         const already = prev.some(d => String(d._id || d.id) === newId);
         return already ? prev : [...prev, created];
       });
 
-      // form में auto-select
       setForm(prev => ({
         ...prev,
         departmentId: newId,
@@ -289,6 +282,33 @@ function Modal({ type, user, onClose, onSuccess }) {
     setError('');
 
     try {
+      if (type === 'employees') {
+        if (!form.firstName || form.firstName.trim().length < 2) {
+          throw new Error('First name must be at least 2 characters.');
+        }
+        if (!form.lastName || form.lastName.trim().length < 1) {
+          throw new Error('Last name is required.');
+        }
+        if (!form.phone || !/^\d{10}$/.test(String(form.phone).trim())) {
+          throw new Error('Phone is required and must contain exactly 10 digits.');
+        }
+        if (!form.joiningDate) {
+          throw new Error('Joining date is required.');
+        }
+        if (!form.password || form.password.length < 6) {
+          throw new Error('Password must be at least 6 characters.');
+        }
+        // ✅ Pre-check: only grant permissions you actually hold
+        const allowed = new Set(user.permissions || []);
+        const invalid = (form.permissions || []).filter(p => !allowed.has(p));
+        if (invalid.length) {
+          throw new Error(
+            `You cannot grant permissions outside your scope: ${invalid.join(', ')}. ` +
+            `Logout and login again if Super Admin recently granted these to you.`
+          );
+        }
+      }
+
       let path;
       let body;
 
@@ -334,7 +354,6 @@ function Modal({ type, user, onClose, onSuccess }) {
         body: JSON.stringify(body)
       });
 
-      // 🆕 Employee documents — ONE upload call for all rows + experience file
       if (type === 'employees') {
         const rowsWithFiles = employeeDocRows.filter(row => row.file);
 
@@ -597,18 +616,17 @@ function Modal({ type, user, onClose, onSuccess }) {
                       required
                     />
                   </Field>
-                {/* // Modal.jsx — branches section */}
-<Field label="Admin phone">
-  <PhoneInput
-    value={form.adminPhone}
-    required
-    onChange={event => set('adminPhone', event.target.value)}
-  />
-</Field>
+                  <Field label="Admin phone">
+                    <PhoneInput
+                      value={form.adminPhone}
+                      required
+                      onChange={event => set('adminPhone', event.target.value)}
+                    />
+                  </Field>
                   <PasswordField
-                    label="Initial password (12+ characters)"
+                    label="Initial password (6+ characters)"
                     required
-                    minLength={12}
+                    minLength={6}
                     value={form.adminPassword}
                     onChange={event => set('adminPassword', event.target.value)}
                   />
@@ -650,8 +668,8 @@ function Modal({ type, user, onClose, onSuccess }) {
                 <Field label="First name" required>
                   <input value={form.firstName} onChange={event => set('firstName', event.target.value)} required />
                 </Field>
-                <Field label="Last name">
-                  <input value={form.lastName} onChange={event => set('lastName', event.target.value)} />
+                <Field label="Last name" required>
+                  <input value={form.lastName} onChange={event => set('lastName', event.target.value)} required />
                 </Field>
                 <Field label="Work email" required wide>
                   <input type="email" value={form.email} onChange={event => set('email', event.target.value)} required />
@@ -661,7 +679,6 @@ function Modal({ type, user, onClose, onSuccess }) {
                   <small>Manager and HR access are assigned through the role selector.</small>
                 </Field>
 
-                {/* 🆕 Department — with inline create option */}
                 <Field label="Department" required>
                   <select
                     value={form.departmentId}
@@ -749,7 +766,6 @@ function Modal({ type, user, onClose, onSuccess }) {
                   </div>
                 </section>
 
-                {/* 🆕 DYNAMIC EMPLOYEE DOCUMENTS — with Add Another button */}
                 <div className="form-section-heading" style={{ gridColumn: '1 / -1' }}>
                   <h3>Employee documents</h3>
                   <p>
@@ -871,8 +887,8 @@ function Modal({ type, user, onClose, onSuccess }) {
                     ))}
                   </select>
                 </Field>
-                <Field label="Phone">
-                  <PhoneInput value={form.phone} onChange={event => set('phone', event.target.value)} />
+                <Field label="Phone" required>
+                  <PhoneInput value={form.phone} required onChange={event => set('phone', event.target.value)} />
                 </Field>
                 <Field label="Joining date" required>
                   <input
@@ -965,12 +981,12 @@ function Modal({ type, user, onClose, onSuccess }) {
                   </>
                 )}
                 <PasswordField
-                  label="Initial password (12+ characters)"
+                  label="Initial password (6+ characters)"
                   required
-                  minLength={12}
+                  minLength={6}
                   value={form.password}
                   onChange={event => set('password', event.target.value)}
-                  placeholder="At least 12 characters"
+                  placeholder="At least 6 characters"
                 />
               </div>
             )}
@@ -1033,7 +1049,6 @@ function Modal({ type, user, onClose, onSuccess }) {
         </div>
       </div>
 
-      {/* 🆕 Inline department creation modal — rendered on top of the employee modal */}
       {showDeptModal && (
         <div
           className="modal-backdrop"

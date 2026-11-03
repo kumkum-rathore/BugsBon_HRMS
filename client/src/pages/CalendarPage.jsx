@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, CalendarDays, Check, ChevronLeft, ChevronRight, MapPin, Plus, Trash2, Users, Video } from 'lucide-react';
+import { CalendarClock, CalendarDays, Check, ChevronLeft, ChevronRight, MapPin, Plus, Trash2, Users, Video, Pencil } from 'lucide-react';
 import { api } from '../lib/api';
 import { Field, LoadingRows } from '../components/common.jsx';
 import FormModal from '../components/FormModal.jsx';
@@ -41,6 +41,7 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
   const [holidayTitle, setHolidayTitle] = useState('');
 
   // Meeting form state
+  const [editingMeetingId, setEditingMeetingId] = useState(null);
   const [meetingTitle, setMeetingTitle] = useState('');
   const [meetingDescription, setMeetingDescription] = useState('');
   const [meetingDate, setMeetingDate] = useState(() => dateKey(suggestedMeetingStart));
@@ -178,6 +179,7 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
 
   function resetMeetingForm() {
     const suggestedStart = new Date(Date.now() + 60 * 60 * 1000);
+    setEditingMeetingId(null);
     setMeetingTitle('');
     setMeetingDescription('');
     setMeetingDate(dateKey(suggestedStart));
@@ -189,9 +191,35 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
     setMeetingAttendeeIds([]);
   }
 
-  async function createMeeting(event) {
+  function openMeetingForm() {
+    resetMeetingForm();
+    setShowMeetingForm(true);
+  }
+
+  function openEditMeetingForm(meeting) {
+    const currentUserId = String(user.id || user._id || '');
+    setEditingMeetingId(meeting._id);
+    setMeetingTitle(meeting.title || '');
+    setMeetingDescription(meeting.description || '');
+    setMeetingDate(meeting.date || dateKey(now));
+    setMeetingTime(meeting.time || '');
+    setMeetingEndTime(meeting.endsAt ? timeKey(new Date(meeting.endsAt)) : '');
+    setMeetingMode(meeting.mode || 'OFFLINE');
+    setMeetingMeetLink(meeting.meetLink || '');
+    setMeetingLocation(meeting.location || '');
+    // Exclude current admin (backend already adds them automatically)
+    setMeetingAttendeeIds(
+      (meeting.attendees || [])
+        .map(a => String(a._id || a))
+        .filter(id => id !== currentUserId)
+    );
+    setShowMeetingForm(true);
+  }
+
+  async function saveMeeting(event) {
     event.preventDefault();
     if (busy) return;
+
     if (!meetingAttendeeIds.length) {
       notify('Select at least one employee to invite.', 'error');
       return;
@@ -212,8 +240,15 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
     }
 
     const startsAt = new Date(`${meetingDate}T${meetingTime}:00`);
-    const endsAt = meetingEndTime ? new Date(`${meetingDate}T${meetingEndTime}:00`) : new Date(startsAt.getTime() + 60 * 60 * 1000);
-    if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() < Date.now() + 10 * 60 * 1000) {
+    const endsAt = meetingEndTime
+      ? new Date(`${meetingDate}T${meetingEndTime}:00`)
+      : new Date(startsAt.getTime() + 60 * 60 * 1000);
+
+    if (Number.isNaN(startsAt.getTime())) {
+      notify('Enter a valid start date and time.', 'error');
+      return;
+    }
+    if (!editingMeetingId && startsAt.getTime() < Date.now() + 10 * 60 * 1000) {
       notify('Schedule the meeting at least 10 minutes from now.', 'error');
       return;
     }
@@ -224,22 +259,33 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
 
     setBusy(true);
     try {
-      await api('/calendar/meetings', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: meetingTitle,
-          description: meetingDescription,
-          date: meetingDate,
-          time: meetingTime,
-          startsAt: startsAt.toISOString(),
-          endsAt: meetingEndTime ? endsAt.toISOString() : null,
-          attendeeIds: meetingAttendeeIds,
-          mode: meetingMode,
-          meetLink: meetingMode === 'ONLINE' ? meetingMeetLink.trim() : '',
-          location: meetingMode === 'OFFLINE' ? meetingLocation.trim() : ''
-        })
-      });
-      notify('Meeting scheduled. Attendees will get an in-app reminder and an email invitation.');
+      const payload = {
+        title: meetingTitle,
+        description: meetingDescription,
+        date: meetingDate,
+        time: meetingTime,
+        startsAt: startsAt.toISOString(),
+        endsAt: meetingEndTime ? endsAt.toISOString() : null,
+        attendeeIds: meetingAttendeeIds,
+        mode: meetingMode,
+        meetLink: meetingMode === 'ONLINE' ? meetingMeetLink.trim() : '',
+        location: meetingMode === 'OFFLINE' ? meetingLocation.trim() : ''
+      };
+
+      if (editingMeetingId) {
+        await api(`/calendar/meetings/${encodeURIComponent(editingMeetingId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+        notify('Meeting updated. Attendees will be notified of changes.');
+      } else {
+        await api('/calendar/meetings', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        notify('Meeting scheduled. Attendees will get an in-app reminder and an email invitation.');
+      }
+
       resetMeetingForm();
       setShowMeetingForm(false);
       const meetingMonth = meetingDate.slice(0, 7);
@@ -250,11 +296,6 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
     } finally {
       setBusy(false);
     }
-  }
-
-  function openMeetingForm() {
-    resetMeetingForm();
-    setShowMeetingForm(true);
   }
 
   async function cancelMeeting(meeting) {
@@ -432,9 +473,26 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
                   </small>
                 </div>
                 {admin && (
-                  <button type="button" className="icon-button employee-action-danger" aria-label={`Cancel ${meeting.title}`} title="Cancel meeting" onClick={() => cancelMeeting(meeting)}>
-                    <Trash2 size={16} />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Edit ${meeting.title}`}
+                      title="Edit meeting"
+                      onClick={() => openEditMeetingForm(meeting)}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button employee-action-danger"
+                      aria-label={`Cancel ${meeting.title}`}
+                      title="Cancel meeting"
+                      onClick={() => cancelMeeting(meeting)}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </>
                 )}
               </article>
             ))}
@@ -491,7 +549,6 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
             {myShift && (
               <div className="calendar-holiday-item">
                 <span><strong>{myShift.name}</strong> · {myShift.startTime}–{myShift.endTime}</span>
-                
               </div>
             )}
           </div>
@@ -527,11 +584,13 @@ function CalendarPage({ user, employees = [], notify, view = 'calendar' }) {
 
       {view !== 'shifts' && admin && showMeetingForm && (
         <FormModal
-          title="Schedule a meeting"
-          description="Choose a mode, date, time and the employees to invite. An in-app reminder and email invitation go out automatically."
-          onClose={() => setShowMeetingForm(false)}
-          onSubmit={createMeeting}
-          submitLabel="Schedule meeting"
+          title={editingMeetingId ? 'Edit meeting' : 'Schedule a meeting'}
+          description={editingMeetingId
+            ? 'Update the meeting details. Attendees are re-notified if the time or invite list changes.'
+            : 'Choose a mode, date, time and the employees to invite. An in-app reminder and email invitation go out automatically.'}
+          onClose={() => { setShowMeetingForm(false); resetMeetingForm(); }}
+          onSubmit={saveMeeting}
+          submitLabel={editingMeetingId ? 'Save changes' : 'Schedule meeting'}
           busy={busy}
         >
           <div className="form-grid">
