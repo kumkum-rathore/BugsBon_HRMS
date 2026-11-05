@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
 const Department = require('../models/Department');
@@ -11,7 +12,11 @@ const { sendSuccess, sendError } = require('../utils/apiResponse');
 const { validatePermissionList, hasPermission } = require('../utils/permissions');
 const { nextBranchCode, previewBranchCode } = require('../utils/codeSequence');
 const { isValidOptionalPhone } = require('../utils/phoneValidation');
+const { sendWelcomeEmail } = require('../utils/email');
+
 const roles = ['EMPLOYEE'];
+const EMPLOYMENT_TYPES = ['EMPLOYEE', 'INTERN'];
+const INTERN_PAYMENT_TYPES = ['PAID', 'UNPAID'];
 
 function safe(u) {
   return {
@@ -22,6 +27,8 @@ function safe(u) {
     email: u.email,
     phone: u.phone,
     role: u.role,
+    employmentType: u.employmentType,          // ✅ NEW
+    internPaymentType: u.internPaymentType,    // ✅ NEW
     branchId: u.branchId,
     shiftId: u.shiftId,
     departmentId: u.departmentId,
@@ -38,6 +45,20 @@ function safe(u) {
     salaryAmount: u.salaryAmount,
     createdAt: u.createdAt
   };
+}
+
+// --------------------------------------------------
+// RANDOM PASSWORD GENERATOR
+// --------------------------------------------------
+function generateRandomPassword(length = 12) {
+  const chars =
+    'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
+  let password = '';
+  const bytes = crypto.randomBytes(length);
+  for (let i = 0; i < length; i++) {
+    password += chars[bytes[i] % chars.length];
+  }
+  return password;
 }
 
 async function previewCode(req, res) {
@@ -71,6 +92,12 @@ async function list(req, res) {
     filter.role = { $ne: 'BRANCH_ADMIN' };
   }
   if (req.query.status && ['INVITED', 'ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(req.query.status)) filter.status = req.query.status;
+
+  // ✅ Optional employment type filter
+  if (req.query.employmentType && EMPLOYMENT_TYPES.includes(req.query.employmentType)) {
+    filter.employmentType = req.query.employmentType;
+  }
+
   if (req.query.search) {
     const term = String(req.query.search).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     filter.$or = [
@@ -101,6 +128,8 @@ async function list(req, res) {
         email: item.email,
         employeeCode: item.employeeCode,
         role: item.role,
+        employmentType: item.employmentType,          // ✅ NEW
+        internPaymentType: item.internPaymentType,    // ✅ NEW
         branchId: item.branchId,
         departmentId: item.departmentId,
         customRole: item.customRole,
@@ -118,19 +147,21 @@ async function create(req, res) {
     return sendError(res, { statusCode: 403, message: 'You do not have permission to create employees.', code: 'FORBIDDEN' });
 
   const {
-    firstName, lastName = '', email, password, role = 'EMPLOYEE', phone = null,
+    firstName, lastName = '', email, role = 'EMPLOYEE', phone = null,
     joiningDate, departmentId = null, customRoleId = null, shiftId, permissions,
     hasPreviousExperience = false, experienceYears = 0, previousCompanyName = '',
-    previousCompanyLeavingDate, previousCompanyLeavingReason = '', salaryAmount = 0
+    previousCompanyLeavingDate, previousCompanyLeavingReason = '', salaryAmount = 0,
+    employmentType = 'EMPLOYEE', internPaymentType = null   // ✅ NEW
   } = req.body || {};
+
+  // ✅ Derived flags
+  const isUnpaidIntern = employmentType === 'INTERN' && internPaymentType === 'UNPAID';
+  const normalizedSalary = isUnpaidIntern ? 0 : Number(salaryAmount);
 
   const errors = [];
   if (typeof firstName !== 'string' || firstName.trim().length < 2) errors.push({ field: 'firstName', message: 'First name must be at least 2 characters.' });
   if (typeof lastName !== 'string' || lastName.trim().length < 1) errors.push({ field: 'lastName', message: 'Last name is required.' });
   if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push({ field: 'email', message: 'Valid email is required.' });
-  // ✅ Password: minimum 6 characters (updated message)
-  if (typeof password !== 'string' || password.length < 6 || password.length > 128)
-    errors.push({ field: 'password', message: 'Initial password must be 6–128 characters.' });
   if (!phone || !isValidOptionalPhone(phone)) errors.push({ field: 'phone', message: 'Phone is required and must contain exactly 10 digits.' });
   if (!roles.includes(role)) errors.push({ field: 'role', message: 'Role is not allowed for employee creation.' });
   if (typeof hasPreviousExperience !== 'boolean') errors.push({ field: 'hasPreviousExperience', message: 'Specify whether the employee has previous work experience.' });
@@ -149,7 +180,24 @@ async function create(req, res) {
     if (Number(experienceYears) <= 0) errors.push({ field: 'experienceYears', message: 'Total experience must be greater than zero when previous experience is selected.' });
   }
   if (!departmentId) errors.push({ field: 'departmentId', message: 'A department is required.' });
-  if (!Number.isFinite(Number(salaryAmount)) || Number(salaryAmount) < 0) errors.push({ field: 'salaryAmount', message: 'Salary must be a non-negative number.' });
+
+  // ✅ Employment type validation
+  if (!EMPLOYMENT_TYPES.includes(employmentType))
+    errors.push({ field: 'employmentType', message: 'Account type must be Employee or Intern.' });
+
+  if (employmentType === 'INTERN') {
+    if (!INTERN_PAYMENT_TYPES.includes(internPaymentType))
+      errors.push({ field: 'internPaymentType', message: 'Select Paid or Unpaid for the intern.' });
+  }
+
+  // ✅ Salary validation (skip for unpaid interns)
+  if (!isUnpaidIntern) {
+    if (!Number.isFinite(normalizedSalary) || normalizedSalary < 0)
+      errors.push({ field: 'salaryAmount', message: 'Salary must be a non-negative number.' });
+    if (employmentType === 'INTERN' && internPaymentType === 'PAID' && normalizedSalary <= 0)
+      errors.push({ field: 'salaryAmount', message: 'Paid interns must have a salary greater than 0.' });
+  }
+
   if (permissions !== undefined && (!validatePermissionList(permissions) || permissions.some(permission => !req.user.permissions?.includes(permission)))) errors.push({ field: 'permissions', message: 'Select only valid permissions granted to your account.' });
   if (!shiftId) errors.push({ field: 'shiftId', message: 'Assign a shift to the employee.' });
   if (role !== 'EMPLOYEE') errors.push({ field: 'role', message: 'Employee base account type must be EMPLOYEE. Use a branch-created custom role for job titles.' });
@@ -192,12 +240,7 @@ async function create(req, res) {
 
   const assignedPermissions = [...new Set(permissions ?? [])];
 
-  // 🔍 DEBUG LOGS — remove once fixed
-  // console.log('🔵 Body permissions sent:', assignedPermissions);
-  // console.log('🔵 User permissions from JWT:', req.user.permissions);
   const missing = assignedPermissions.filter(p => !req.user.permissions?.includes(p));
-  console.log('🔵 Missing permissions:', missing);
-
   if (missing.length) {
     return sendError(res, {
       statusCode: 400,
@@ -207,7 +250,9 @@ async function create(req, res) {
     });
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
+  // ✅ Auto-generate random password
+  const autoPassword = generateRandomPassword(12);
+  const passwordHash = await bcrypt.hash(autoPassword, 12);
 
   try {
     const joined = new Date(joiningDate);
@@ -222,6 +267,8 @@ async function create(req, res) {
       email: email.trim().toLowerCase(),
       passwordHash,
       role,
+      employmentType,                                                    // ✅ NEW
+      internPaymentType: employmentType === 'INTERN' ? internPaymentType : null,  // ✅ NEW
       branchId: targetBranch || null,
       phone,
       employeeCode,
@@ -235,18 +282,19 @@ async function create(req, res) {
       previousCompanyName: hasPreviousExperience ? previousCompanyName.trim() : '',
       previousCompanyLeavingDate: hasPreviousExperience ? new Date(previousCompanyLeavingDate) : null,
       previousCompanyLeavingReason: hasPreviousExperience ? previousCompanyLeavingReason.trim() : '',
-      salaryAmount: Number(salaryAmount),
+      salaryAmount: normalizedSalary,                                    // ✅ unpaid => 0
       status: 'ACTIVE'
     });
 
-    {
+    // ✅ Create initial salary record ONLY for paid employees / paid interns
+    if (!isUnpaidIntern) {
       const month = `${joined.getFullYear()}-${String(joined.getMonth() + 1).padStart(2, '0')}`;
       try {
         await Salary.create({
           branchId: targetBranch,
           userId: user._id,
           month,
-          baseSalary: Number(salaryAmount),
+          baseSalary: normalizedSalary,
           createdBy: req.user.id,
           status: 'DRAFT',
           notes: 'Initial salary record created during employee onboarding.'
@@ -257,7 +305,26 @@ async function create(req, res) {
       }
     }
 
-    return sendSuccess(res, { statusCode: 201, message: 'Employee created with onboarding salary record.', data: safe(user) });
+    // ✅ Send welcome email with generated credentials (non-blocking)
+    try {
+      await sendWelcomeEmail({
+        to: user.email,
+        name: `${user.firstName} ${user.lastName}`.trim(),
+        email: user.email,
+        password: autoPassword,
+        employeeCode: user.employeeCode,
+        companyName: process.env.SMTP_FROM_NAME || 'Bugsbon HRMS'
+      });
+    } catch (emailErr) {
+      console.error('Welcome email failed:', emailErr.message);
+      // Employee is still created — do not fail the request.
+    }
+
+    return sendSuccess(res, {
+      statusCode: 201,
+      message: 'Employee created successfully. Login credentials have been sent to their email.',
+      data: safe(user)
+    });
   } catch (err) {
     if (err.code === 11000)
       return sendError(res, { statusCode: 409, message: 'Email or employee code already exists.', code: 'DUPLICATE_RECORD' });
@@ -279,7 +346,8 @@ async function update(req, res) {
     firstName, lastName, email, status, phone, joiningDate, departmentId,
     customRoleId, shiftId, salaryAmount, experienceYears, hasPreviousExperience,
     previousCompanyName, previousCompanyLeavingDate, previousCompanyLeavingReason,
-    experienceSummary, permissions
+    experienceSummary, permissions,
+    employmentType, internPaymentType   // ✅ NEW
   } = req.body || {};
 
   if (phone !== undefined && (!phone || !isValidOptionalPhone(phone)))
@@ -312,12 +380,43 @@ async function update(req, res) {
       return sendError(res, { statusCode: 400, message: 'Joining date must be a valid date that is not in the future.', code: 'INVALID_JOINING_DATE' });
     user.joiningDate = joined;
   }
-  if (salaryAmount !== undefined) {
+
+  // ✅ Employment type / intern payment update
+  if (employmentType !== undefined) {
+    if (!EMPLOYMENT_TYPES.includes(employmentType))
+      return sendError(res, { statusCode: 400, message: 'Account type must be Employee or Intern.', code: 'INVALID_EMPLOYMENT_TYPE' });
+    user.employmentType = employmentType;
+    if (employmentType !== 'INTERN') {
+      user.internPaymentType = null;
+    }
+  }
+  if (internPaymentType !== undefined) {
+    const effectiveType = employmentType !== undefined ? employmentType : user.employmentType;
+    if (effectiveType === 'INTERN') {
+      if (!INTERN_PAYMENT_TYPES.includes(internPaymentType))
+        return sendError(res, { statusCode: 400, message: 'Select Paid or Unpaid for the intern.', code: 'INVALID_INTERN_PAYMENT_TYPE' });
+      user.internPaymentType = internPaymentType;
+    } else {
+      user.internPaymentType = null;
+    }
+  }
+
+  // ✅ Salary update — skip / force 0 for unpaid intern
+  const effectiveEmploymentType = employmentType !== undefined ? employmentType : user.employmentType;
+  const effectiveInternPaymentType = internPaymentType !== undefined ? internPaymentType : user.internPaymentType;
+  const willBeUnpaidIntern = effectiveEmploymentType === 'INTERN' && effectiveInternPaymentType === 'UNPAID';
+
+  if (willBeUnpaidIntern) {
+    user.salaryAmount = 0;
+  } else if (salaryAmount !== undefined) {
     const sal = Number(salaryAmount);
     if (!Number.isFinite(sal) || sal < 0)
       return sendError(res, { statusCode: 400, message: 'Salary must be a non-negative number.', code: 'VALIDATION_ERROR' });
+    if (effectiveEmploymentType === 'INTERN' && effectiveInternPaymentType === 'PAID' && sal <= 0)
+      return sendError(res, { statusCode: 400, message: 'Paid interns must have a salary greater than 0.', code: 'VALIDATION_ERROR' });
     user.salaryAmount = sal;
   }
+
   if (shiftId !== undefined && shiftId !== null && shiftId !== '') {
     if (!mongoose.isValidObjectId(shiftId))
       return sendError(res, { statusCode: 400, message: 'Select a valid shift.', code: 'INVALID_SHIFT' });

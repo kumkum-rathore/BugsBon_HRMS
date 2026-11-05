@@ -88,6 +88,26 @@ function getEmployeeId(employee) {
   return employee?.id || employee?._id;
 }
 
+// --------------------------------------------------
+// INTERN HELPERS
+// --------------------------------------------------
+
+function isUnpaidIntern(employee) {
+  return (
+    employee?.employmentType === 'INTERN' &&
+    employee?.internPaymentType === 'UNPAID'
+  );
+}
+
+function employmentTypeLabel(employee) {
+  if (employee?.employmentType === 'INTERN') {
+    return employee?.internPaymentType === 'UNPAID'
+      ? 'Intern (Unpaid)'
+      : 'Intern (Paid)';
+  }
+  return 'Employee';
+}
+
 export default function Employees({
   employees = [],
   loading = false,
@@ -124,6 +144,7 @@ export default function Employees({
   const [departmentFilter, setDepartmentFilter] = useState('ALL');
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [employmentTypeFilter, setEmploymentTypeFilter] = useState('ALL');
 
   // --------------------------------------------------
   // MASTER DEPARTMENT AND ROLE STATES
@@ -177,7 +198,9 @@ export default function Employees({
     permissions: [],
     departmentId: '',
     customRoleId: '',
-    role: ''
+    role: '',
+    employmentType: 'EMPLOYEE',   // NEW
+    internPaymentType: ''         // NEW
   });
 
   // --------------------------------------------------
@@ -195,8 +218,6 @@ export default function Employees({
 
   // --------------------------------------------------
   // UPDATE EMPLOYEE ROWS
-  // Always strip out Branch Admins / Super Admins here
-  // so they can never leak into the directory.
   // --------------------------------------------------
 
   useEffect(() => {
@@ -206,8 +227,6 @@ export default function Employees({
 
     setEmployeeRows(directoryOnly);
 
-    // If the currently selected employee is no longer valid
-    // (e.g. became a Branch Admin), close the modal.
     setSelectedEmployee(previous => {
       if (!previous) return previous;
 
@@ -300,15 +319,12 @@ export default function Employees({
 
   // --------------------------------------------------
   // DEPARTMENTS
-  // All departments come from departments API.
-  // Not from employeeRows.
   // --------------------------------------------------
 
   const departments = localDepartments;
 
   // --------------------------------------------------
   // DEPARTMENT-WISE ROLES
-  // All roles come from roles API.
   // --------------------------------------------------
 
   const departmentRoles = allRoles.reduce((map, role) => {
@@ -338,7 +354,6 @@ export default function Employees({
 
   // --------------------------------------------------
   // FILTER ROLES
-  // First select department, then its roles.
   // --------------------------------------------------
 
   const filterRoles =
@@ -351,7 +366,6 @@ export default function Employees({
   // --------------------------------------------------
 
   const filtered = employeeRows.filter(employee => {
-    // Defensive: skip anything that shouldn't be here.
     if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) {
       return false;
     }
@@ -391,6 +405,11 @@ export default function Employees({
       (
         statusFilter === 'ALL' ||
         employee.status === statusFilter
+      ) &&
+
+      (
+        employmentTypeFilter === 'ALL' ||
+        (employee.employmentType || 'EMPLOYEE') === employmentTypeFilter
       )
     );
   });
@@ -496,7 +515,6 @@ export default function Employees({
     startEditing = false,
     confirmDeactivate = false
   ) {
-    // Defensive: never open a Branch Admin / Super Admin
     if (EXCLUDED_FROM_DIRECTORY.includes(employee?.role)) {
       return;
     }
@@ -540,7 +558,10 @@ export default function Employees({
 
       customRoleId: getId(employee.customRole),
 
-      role: employee.role || ''
+      role: employee.role || '',
+
+      employmentType: employee.employmentType || 'EMPLOYEE',   // NEW
+      internPaymentType: employee.internPaymentType || ''      // NEW
     });
 
     setNewDocRows([newDocRow('IDENTITY')]);
@@ -648,6 +669,26 @@ export default function Employees({
       return;
     }
 
+    // ✅ Intern validations
+    if (formData.employmentType === 'INTERN' && !formData.internPaymentType) {
+      setError('Please select Paid or Unpaid for the intern.');
+      return;
+    }
+
+    const unpaidIntern =
+      formData.employmentType === 'INTERN' &&
+      formData.internPaymentType === 'UNPAID';
+
+    if (
+      !unpaidIntern &&
+      formData.employmentType === 'INTERN' &&
+      formData.internPaymentType === 'PAID' &&
+      (Number(formData.salaryAmount) || 0) <= 0
+    ) {
+      setError('Paid interns must have a salary greater than 0.');
+      return;
+    }
+
     const rowsWithFiles = newDocRows.filter(row => row.file);
 
     if (rowsWithFiles.length > MAX_FILES) {
@@ -687,7 +728,9 @@ export default function Employees({
         joiningDate: formData.joiningDate || null,
         shiftId: formData.shiftId || null,
 
-        salaryAmount: Number(formData.salaryAmount) || 0,
+        salaryAmount: unpaidIntern
+          ? 0
+          : Number(formData.salaryAmount) || 0,
         status: formData.status,
 
         experienceYears: experience,
@@ -710,7 +753,13 @@ export default function Employees({
         departmentId: formData.departmentId || null,
         customRoleId: formData.customRoleId || null,
 
-        role: formData.role || undefined
+        role: formData.role || undefined,
+
+        employmentType: formData.employmentType,
+        internPaymentType:
+          formData.employmentType === 'INTERN'
+            ? formData.internPaymentType
+            : null
       };
 
       const result = await api(
@@ -769,8 +818,6 @@ export default function Employees({
 
       setNewDocRows([newDocRow('IDENTITY')]);
 
-      // UPDATE EMPLOYEE LIST
-      // Skip if the updated employee somehow became a Branch Admin
       const becomesExcluded = EXCLUDED_FROM_DIRECTORY.includes(
         updatedEmployee?.role
       );
@@ -877,7 +924,13 @@ export default function Employees({
           previous.customRoleId,
 
         role:
-          updatedEmployee.role ?? previous.role
+          updatedEmployee.role ?? previous.role,
+
+        employmentType:
+          updatedEmployee.employmentType ?? previous.employmentType,
+
+        internPaymentType:
+          updatedEmployee.internPaymentType ?? previous.internPaymentType
       }));
 
       setEditing(false);
@@ -1229,6 +1282,20 @@ export default function Employees({
             ))}
           </select>
 
+          {/* EMPLOYMENT TYPE FILTER */}
+
+          <select
+            value={employmentTypeFilter}
+            onChange={event =>
+              setEmploymentTypeFilter(event.target.value)
+            }
+            aria-label="Filter by account type"
+          >
+            <option value="ALL">All account types</option>
+            <option value="EMPLOYEE">Employees</option>
+            <option value="INTERN">Interns</option>
+          </select>
+
         </div>
 
         {loading ? (
@@ -1270,6 +1337,27 @@ export default function Employees({
                         <div>
                           <strong>
                             {employee.firstName} {employee.lastName}
+                            {employee.employmentType === 'INTERN' && (
+                              <span
+                                style={{
+                                  marginLeft: 8,
+                                  padding: '2px 8px',
+                                  borderRadius: 999,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  background:
+                                    employee.internPaymentType === 'UNPAID'
+                                      ? '#fdecea'
+                                      : '#e8f5e9',
+                                  color:
+                                    employee.internPaymentType === 'UNPAID'
+                                      ? '#b71c1c'
+                                      : '#1b5e20'
+                                }}
+                              >
+                                Intern · {employee.internPaymentType === 'UNPAID' ? 'Unpaid' : 'Paid'}
+                              </span>
+                            )}
                           </strong>
 
                           <span>{employee.email}</span>
@@ -1552,17 +1640,104 @@ export default function Employees({
                     </select>
                   </label>
 
+                  {/* ACCOUNT TYPE */}
+
                   <label>
-                    Salary amount
-                    <input
-                      name="salaryAmount"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={formData.salaryAmount}
-                      onChange={handleChange}
-                    />
+                    Account type
+                    <select
+                      name="employmentType"
+                      value={formData.employmentType}
+                      onChange={event => {
+                        const value = event.target.value;
+                        setFormData(previous => ({
+                          ...previous,
+                          employmentType: value,
+                          internPaymentType:
+                            value === 'INTERN'
+                              ? previous.internPaymentType
+                              : '',
+                          salaryAmount:
+                            value === 'INTERN' &&
+                            previous.internPaymentType === 'UNPAID'
+                              ? 0
+                              : previous.salaryAmount
+                        }));
+                      }}
+                    >
+                      <option value="EMPLOYEE">Employee</option>
+                      <option value="INTERN">Intern</option>
+                    </select>
                   </label>
+
+                  {/* INTERN PAYMENT TYPE */}
+
+                  {formData.employmentType === 'INTERN' && (
+                    <label>
+                      Intern payment type
+                      <select
+                        name="internPaymentType"
+                        value={formData.internPaymentType}
+                        onChange={event => {
+                          const value = event.target.value;
+                          setFormData(previous => ({
+                            ...previous,
+                            internPaymentType: value,
+                            salaryAmount:
+                              value === 'UNPAID'
+                                ? 0
+                                : previous.salaryAmount
+                          }));
+                        }}
+                        required
+                      >
+                        <option value="">Select payment type</option>
+                        <option value="PAID">Paid</option>
+                        <option value="UNPAID">Unpaid</option>
+                      </select>
+                    </label>
+                  )}
+
+                  {/* SALARY — hide for unpaid interns */}
+
+                  {!(
+                    formData.employmentType === 'INTERN' &&
+                    formData.internPaymentType === 'UNPAID'
+                  ) && (
+                    <label>
+                      Salary amount
+                      <input
+                        name="salaryAmount"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={formData.salaryAmount}
+                        onChange={handleChange}
+                        required={
+                          formData.employmentType === 'INTERN' &&
+                          formData.internPaymentType === 'PAID'
+                        }
+                      />
+                    </label>
+                  )}
+
+                  {/* UNPAID INTERN INFO */}
+
+                  {formData.employmentType === 'INTERN' &&
+                    formData.internPaymentType === 'UNPAID' && (
+                      <div
+                        className="employee-full-width"
+                        style={{
+                          padding: '10px 14px',
+                          background: '#eef6ff',
+                          border: '1px solid #b6d4fe',
+                          borderRadius: 8,
+                          color: '#0b4a8f',
+                          fontSize: 13
+                        }}
+                      >
+                        Unpaid intern selected — no monthly salary will be recorded.
+                      </div>
+                    )}
 
                   {/* DEPARTMENT */}
 
@@ -2094,17 +2269,30 @@ export default function Employees({
                     }
                   />
 
-                  <Detail
+                  {/* <Detail
                     icon={UserRound}
                     label="Account Role"
                     value={roleLabel(selectedEmployee.role)}
-                  />
+                  /> */}
 
                   <Detail
                     icon={UserRound}
                     label="Job Role"
                     value={selectedEmployee.customRole?.name || '—'}
                   />
+
+                  {/* ✅ NEW: Account type detail */}
+                 <Detail
+  icon={UserRound}
+  label="Account type"
+  value={employmentTypeLabel(selectedEmployee)}
+/>
+
+<Detail
+  icon={UserRound}
+  label="Base role"
+  value={roleLabel(selectedEmployee.role)}
+/>
 
                   <Detail
                     icon={Clock}
@@ -2118,13 +2306,16 @@ export default function Employees({
                     }
                   />
 
+                  {/* ✅ Salary — conditional for unpaid intern */}
                   <Detail
                     icon={IndianRupee}
                     label="Salary"
                     value={
-                      selectedEmployee.salaryAmount != null
-                        ? `${selectedEmployee.salaryAmount} INR`
-                        : '—'
+                      isUnpaidIntern(selectedEmployee)
+                        ? 'Unpaid intern'
+                        : selectedEmployee.salaryAmount != null
+                          ? `${selectedEmployee.salaryAmount} INR`
+                          : '—'
                     }
                   />
 

@@ -7,6 +7,7 @@ router.get('/', c.list);
 router.post('/', c.create);
 router.patch('/:id', c.update);
 router.delete('/:id', c.archive);
+router.post('/bulk', c.bulkCreate);
 router.get('/permissions', (req, res) => {
   if (req.user.role !== 'SUPER_ADMIN' && !hasPermission(req.user, 'role.create'))
     return res.status(403).json({ success: false, message: 'You do not have permission to view the permission catalogue.', error: { code: 'FORBIDDEN', details: [] } });

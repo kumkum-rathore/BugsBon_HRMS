@@ -161,4 +161,107 @@ async function archive(req, res) {
   return sendSuccess(res, { message: 'Role archived.', data: role });
 }
 
-module.exports = { list, create, update, archive, allowedPermissions };
+async function bulkCreate(req, res) {
+  if (req.user.role !== 'BRANCH_ADMIN' || !hasPermission(req.user, 'role.create'))
+    return sendError(res, { statusCode: 403, message: 'You do not have permission to create branch roles.', code: 'FORBIDDEN' });
+
+  const { departmentId, roles } = req.body || {};
+
+  if (!departmentId)
+    return sendError(res, { statusCode: 400, message: 'Department is required to create roles.', code: 'VALIDATION_ERROR' });
+
+  if (!Array.isArray(roles) || roles.length === 0)
+    return sendError(res, { statusCode: 400, message: 'At least one role is required.', code: 'VALIDATION_ERROR' });
+
+  if (roles.length > 20)
+    return sendError(res, { statusCode: 400, message: 'You can create maximum 20 roles at once.', code: 'VALIDATION_ERROR' });
+
+  // department validate karo
+  const dept = await Department.findOne({
+    _id: departmentId,
+    branchId: req.user.branchId,
+    isDelete: { $ne: true }
+  }).select('_id');
+  if (!dept)
+    return sendError(res, { statusCode: 400, message: 'Selected department is invalid.', code: 'INVALID_DEPARTMENT' });
+
+  // Har role ko validate karo pehle
+  const prepared = [];
+  const seenCodes = new Set();
+
+  for (let i = 0; i < roles.length; i++) {
+    const r = roles[i] || {};
+    const name = typeof r.name === 'string' ? r.name.trim() : '';
+    const description = typeof r.description === 'string' ? r.description.trim() : '';
+
+    if (name.length < 2 || name.length > 80)
+      return sendError(res, {
+        statusCode: 400,
+        message: `Role #${i + 1}: name must be between 2 and 80 characters.`,
+        code: 'VALIDATION_ERROR'
+      });
+
+    if (description.length > 500)
+      return sendError(res, {
+        statusCode: 400,
+        message: `Role #${i + 1}: description cannot exceed 500 characters.`,
+        code: 'VALIDATION_ERROR'
+      });
+
+    const code = name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-+$/g, '');
+    if (!code)
+      return sendError(res, {
+        statusCode: 400,
+        message: `Role #${i + 1}: name must include letters or numbers.`,
+        code: 'VALIDATION_ERROR'
+      });
+
+    if (seenCodes.has(code))
+      return sendError(res, {
+        statusCode: 400,
+        message: `Duplicate role "${name}" in this batch.`,
+        code: 'DUPLICATE_ROLE'
+      });
+    seenCodes.add(code);
+
+    prepared.push({
+      branchId: req.user.branchId,
+      departmentId: dept._id,
+      name,
+      code,
+      description,
+      createdBy: req.user.id
+    });
+  }
+
+  // Existing codes check karo (same department me)
+  const existing = await CustomRole.find({
+    branchId: req.user.branchId,
+    departmentId: dept._id,
+    isDelete: { $ne: true },
+    code: { $in: prepared.map((p) => p.code) }
+  }).select('code name').lean();
+
+  if (existing.length) {
+    const conflicts = existing.map((e) => e.name).join(', ');
+    return sendError(res, {
+      statusCode: 409,
+      message: `These roles already exist in this department: ${conflicts}`,
+      code: 'DUPLICATE_ROLE'
+    });
+  }
+
+  try {
+    const created = await CustomRole.insertMany(prepared, { ordered: true });
+    return sendSuccess(res, {
+      statusCode: 201,
+      message: `${created.length} role(s) created successfully.`,
+      data: created
+    });
+  } catch (error) {
+    if (error.code === 11000)
+      return sendError(res, { statusCode: 409, message: 'One or more roles already exist in this department.', code: 'DUPLICATE_ROLE' });
+    throw error;
+  }
+}
+module.exports = { list, create, update, archive, bulkCreate, allowedPermissions };

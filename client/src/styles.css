@@ -5687,3 +5687,32 @@ tbody tr:hover {
 .doc-tabs{
   margin: 20px;
 }
+
+.login-link-button {
+  background: none;
+  border: none;
+  color: #1a73e8;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.login-link-button:hover {
+  color: #1557b0;
+}
+
+.login-error {
+  color: #dc2626;
+  font-size: 13px;
+  margin: -4px 0 0;
+}
+
+.label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}

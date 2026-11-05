@@ -54,6 +54,9 @@ import SalaryPage from './pages/SalaryPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import Modal from './pages/Modal.jsx';
 import { roleLabel, pageLabel, heading, subheading, canManage, titleCase } from './utils/labels.js';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+
 
 function App() {
   const [user, setUser] = useState(null);

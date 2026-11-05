@@ -30,7 +30,8 @@ function LoginPage({
   setPassword,
   onSubmit,
   busy,
-  notice
+  notice,
+  onForgotPassword
 }) {
   return (
     <main className="login-layout">
@@ -64,6 +65,13 @@ function LoginPage({
 
             <div className="label-row">
               <label htmlFor="login-password">Password</label>
+              <button
+                type="button"
+                className="login-link-button"
+                onClick={onForgotPassword}
+              >
+                Forgot password?
+              </button>
             </div>
             <div className="input-wrap">
               <LockKeyhole size={18} className="login-input-icon" aria-hidden="true" />

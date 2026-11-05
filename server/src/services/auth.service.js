@@ -1,7 +1,8 @@
-
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const RefreshSession = require('../models/RefreshSession');
+const { sendPasswordResetEmail } = require('../utils/email');
 const {
   createAccessToken,
   createRefreshToken,
@@ -219,4 +220,86 @@ async function logout(token) {
   );
 }
 
-module.exports = { login, refresh, logout, safeUser };
+// ⬇️ NEW: hash the raw reset token so we never store it in plaintext
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+// ⬇️ NEW: forgot password
+async function forgotPassword({ email }) {
+  const user = await User.findOne({ email: String(email).toLowerCase().trim() });
+
+  // Always succeed silently — do not leak whether email exists
+  if (!user || user.status !== 'ACTIVE') {
+    return { delivered: true };
+  }
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashResetToken(rawToken);
+  const ttlMinutes = Number(process.env.PASSWORD_RESET_TTL_MINUTES || 30);
+
+  user.resetPasswordTokenHash = tokenHash;
+  user.resetPasswordExpiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  await user.save();
+
+  const appBaseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
+  const resetUrl = `${appBaseUrl.replace(/\/$/, '')}/reset-password?token=${rawToken}`;
+
+  try {
+    await sendPasswordResetEmail({
+      to: user.email,
+      name: user.firstName,
+      resetUrl,
+      expiresInMinutes: ttlMinutes,
+    });
+  } catch (err) {
+    console.error('[auth] Failed to send password reset email:', err);
+    // Do NOT throw — prevents leaking email existence
+  }
+
+  return { delivered: true };
+}
+
+// ⬇️ NEW: reset password
+async function resetPassword({ token, password }) {
+  if (!token || typeof token !== 'string') {
+    throw authError('Reset token is required.', 400, 'RESET_TOKEN_REQUIRED');
+  }
+
+  const tokenHash = hashResetToken(token);
+
+  const user = await User.findOne({
+    resetPasswordTokenHash: tokenHash,
+    resetPasswordExpiresAt: { $gt: new Date() },
+  }).select('+resetPasswordTokenHash +resetPasswordExpiresAt +passwordHash');
+
+  if (!user) {
+    throw authError('Reset link is invalid or expired.', 400, 'RESET_TOKEN_INVALID');
+  }
+
+  user.passwordHash = await bcrypt.hash(password, 10);
+  user.resetPasswordTokenHash = null;
+  user.resetPasswordExpiresAt = null;
+
+  // Invalidate all existing sessions
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+  await user.save();
+
+  // Revoke all refresh sessions for this user
+  await RefreshSession.updateMany(
+    { userId: user._id, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+
+  return { reset: true };
+}
+
+module.exports = {
+  login,
+  refresh,
+  logout,
+  safeUser,
+  forgotPassword,
+  resetPassword,
+};

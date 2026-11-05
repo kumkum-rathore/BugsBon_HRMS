@@ -74,7 +74,7 @@ function Modal({ type, user, onClose, onSuccess }) {
         firstName: '',
         lastName: '',
         email: '',
-        password: '',
+        // password: '',
         role: 'EMPLOYEE',
         branchId: user.branchId || '',
         customRoleId: '',
@@ -86,6 +86,8 @@ function Modal({ type, user, onClose, onSuccess }) {
         phone: '',
         joiningDate: new Date().toISOString().slice(0, 10),
         salaryAmount: '0',
+        employmentType: 'EMPLOYEE',   // ⬅️ NEW
+        internPaymentType: '',
         hasPreviousExperience: false,
         experienceYears: '0',
         previousCompanyName: '',
@@ -190,13 +192,13 @@ function Modal({ type, user, onClose, onSuccess }) {
 
   const selectedDepartmentRoles = form.departmentId
     ? roleOptions.filter(role => {
-        const deptOfRole =
-          role.departmentId?._id ||
-          role.departmentId ||
-          role.department?._id ||
-          role.department;
-        return String(deptOfRole) === String(form.departmentId);
-      })
+      const deptOfRole =
+        role.departmentId?._id ||
+        role.departmentId ||
+        role.department?._id ||
+        role.department;
+      return String(deptOfRole) === String(form.departmentId);
+    })
     : [];
 
   function addEmployeeDocRow() {
@@ -292,12 +294,27 @@ function Modal({ type, user, onClose, onSuccess }) {
         if (!form.phone || !/^\d{10}$/.test(String(form.phone).trim())) {
           throw new Error('Phone is required and must contain exactly 10 digits.');
         }
+
+        if (form.employmentType === 'INTERN' && !form.internPaymentType) {
+          throw new Error('Please select Paid or Unpaid for the intern.');
+        }
+        if (form.employmentType === 'INTERN' && form.internPaymentType === 'PAID') {
+          if (!form.salaryAmount || Number(form.salaryAmount) <= 0) {
+            throw new Error('Paid interns must have a monthly salary greater than 0.');
+          }
+        }
+
+        // Unpaid intern ke liye salary 0 force karo
+        if (form.employmentType === 'INTERN' && form.internPaymentType === 'UNPAID') {
+          form.salaryAmount = '0';
+        }
+
         if (!form.joiningDate) {
           throw new Error('Joining date is required.');
         }
-        if (!form.password || form.password.length < 6) {
-          throw new Error('Password must be at least 6 characters.');
-        }
+        // if (!form.password || form.password.length < 6) {
+        //   throw new Error('Password must be at least 6 characters.');
+        // }
         // ✅ Pre-check: only grant permissions you actually hold
         const allowed = new Set(user.permissions || []);
         const invalid = (form.permissions || []).filter(p => !allowed.has(p));
@@ -365,10 +382,10 @@ function Modal({ type, user, onClose, onSuccess }) {
           })),
           ...(form.experienceFile
             ? [{
-                file: form.experienceFile,
-                category: 'EXPERIENCE',
-                title: form.experienceFile.name
-              }]
+              file: form.experienceFile,
+              category: 'EXPERIENCE',
+              title: form.experienceFile.name
+            }]
             : [])
         ];
 
@@ -437,7 +454,14 @@ function Modal({ type, user, onClose, onSuccess }) {
         }
       }
 
-      onSuccess(result.message || 'Saved successfully.');
+      if (type === 'employees') {
+        onSuccess(
+          result.message ||
+          'Employee created. Login credentials have been sent to their email.'
+        );
+      } else {
+        onSuccess(result.message || 'Saved successfully.');
+      }
     } catch (submitError) {
       setError(submitError.message);
     } finally {
@@ -642,6 +666,24 @@ function Modal({ type, user, onClose, onSuccess }) {
                       onChange={event => set('adminPhone', event.target.value)}
                     />
                   </Field>
+
+                  <div
+                    className="form-tip"
+                    style={{
+                      gridColumn: '1 / -1',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 14px',
+                      background: '#eef6ff',
+                      border: '1px solid #b6d4fe',
+                      borderRadius: 8,
+                      color: '#0b4a8f',
+                      fontSize: 13
+                    }}
+                  >
+
+                  </div>
                   <PasswordField
                     label="Initial password (6+ characters)"
                     required
@@ -684,107 +726,27 @@ function Modal({ type, user, onClose, onSuccess }) {
 
             {type === 'employees' && (
               <div className="form-grid">
+                {/* 1. First name */}
                 <Field label="First name" required>
                   <input value={form.firstName} onChange={event => set('firstName', event.target.value)} required />
                 </Field>
+
+                {/* 2. Last name */}
                 <Field label="Last name" required>
                   <input value={form.lastName} onChange={event => set('lastName', event.target.value)} required />
                 </Field>
+
+                {/* 3. Work email */}
                 <Field label="Work email" required wide>
                   <input type="email" value={form.email} onChange={event => set('email', event.target.value)} required />
                 </Field>
-                <Field label="Account type" required>
-                  <input value="Employee" readOnly aria-readonly="true" />
-                  <small>Manager and HR access are assigned through the role selector.</small>
+
+                {/* 4. Phone */}
+                <Field label="Phone" required>
+                  <PhoneInput value={form.phone} required onChange={event => set('phone', event.target.value)} />
                 </Field>
 
-                <Field label="Department" required>
-                  <select
-                    value={form.departmentId}
-                    onChange={event => {
-                      const departmentId = event.target.value;
-                      if (departmentId === '__CREATE__') {
-                        setShowDeptModal(true);
-                        setDeptError('');
-                        return;
-                      }
-                      setForm(previous => ({
-                        ...previous,
-                        departmentId,
-                        customRoleId: ''
-                      }));
-                    }}
-                    required
-                  >
-                    <option value="">Select department</option>
-                    {departmentOptions.map(department => (
-                      <option value={department._id} key={department._id}>
-                        {department.name}
-                      </option>
-                    ))}
-                    {user.permissions?.includes('department.create') && (
-                      <option value="__CREATE__">➕ Add new department…</option>
-                    )}
-                  </select>
-                </Field>
-
-                <Field label="Role">
-                  <select
-                    value={form.customRoleId}
-                    onChange={event => set('customRoleId', event.target.value)}
-                    disabled={!form.departmentId || selectedDepartmentRoles.length === 0}
-                  >
-                    <option value="">
-                      {!form.departmentId
-                        ? 'Select a department first'
-                        : selectedDepartmentRoles.length === 0
-                          ? 'No roles in this department'
-                          : 'Employee (no custom role)'}
-                    </option>
-                    {selectedDepartmentRoles.map(role => (
-                      <option value={role._id} key={role._id}>{role.name}</option>
-                    ))}
-                  </select>
-                  <small>
-                    {!form.departmentId
-                      ? 'Choose a department to see its roles.'
-                      : 'Role is the employee\'s job title within this department.'}
-                  </small>
-                </Field>
-
-                <section className="branch-permissions-section">
-                  <h3>Employee permissions</h3>
-                  <p>Select the pages and actions this employee needs. Permissions are assigned to this employee, not the role.</p>
-                  <div className="permission-bulk-actions">
-                    <button type="button" onClick={() => {
-                      const available = PERMISSION_OPTIONS
-                        .filter(([permission]) => (user.permissions || []).includes(permission))
-                        .map(([permission]) => permission);
-                      set('permissions', available);
-                    }}>Select all</button>
-                    <button type="button" onClick={() => set('permissions', [])}>Clear all</button>
-                  </div>
-                  <div className="branch-permissions-grid">
-                    {PERMISSION_OPTIONS.filter(([permission]) =>
-                      (user.permissions || []).includes(permission)
-                    ).map(([permission, label]) => (
-                      <label className="branch-permission-option" key={permission}>
-                        <input
-                          type="checkbox"
-                          checked={form.permissions.includes(permission)}
-                          onChange={event => {
-                            const nextPermissions = event.target.checked
-                              ? [...form.permissions, permission]
-                              : form.permissions.filter(item => item !== permission);
-                            set('permissions', nextPermissions);
-                          }}
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </section>
-
+                {/* 5. Employee documents */}
                 <div className="form-section-heading" style={{ gridColumn: '1 / -1' }}>
                   <h3>Employee documents</h3>
                   <p>
@@ -889,45 +851,8 @@ function Modal({ type, user, onClose, onSuccess }) {
                   )}
                 </div>
 
-                <Field label="Shift" required>
-                  <select
-                    value={form.shiftId}
-                    onChange={event => set('shiftId', event.target.value)}
-                    required
-                    disabled={!shiftOptions.length}
-                  >
-                    <option value="">
-                      {shiftOptions.length ? 'Select shift' : 'Create a shift in Calendar first'}
-                    </option>
-                    {shiftOptions.map(shift => (
-                      <option value={shift._id} key={shift._id}>
-                        {shift.name} · {shift.startTime}–{shift.endTime}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Phone" required>
-                  <PhoneInput value={form.phone} required onChange={event => set('phone', event.target.value)} />
-                </Field>
-                <Field label="Joining date" required>
-                  <input
-                    type="date"
-                    value={form.joiningDate}
-                    onChange={event => set('joiningDate', event.target.value)}
-                    required
-                  />
-                </Field>
-                <Field label="Monthly salary (₹)" required>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.salaryAmount}
-                    onChange={event => set('salaryAmount', event.target.value)}
-                    required
-                  />
-                </Field>
-                <div className="form-section-heading">
+                {/* 6. Has previous experience */}
+                <div className="form-section-heading" style={{ gridColumn: '1 / -1' }}>
                   <h3>Previous experience</h3>
                   <p>Add previous company details if the employee has work experience.</p>
                 </div>
@@ -999,14 +924,203 @@ function Modal({ type, user, onClose, onSuccess }) {
                     </Field>
                   </>
                 )}
-                <PasswordField
-                  label="Initial password (6+ characters)"
-                  required
-                  minLength={6}
-                  value={form.password}
-                  onChange={event => set('password', event.target.value)}
-                  placeholder="At least 6 characters"
-                />
+
+                {/* 7. Joining date */}
+                <Field label="Joining date" required>
+                  <input
+                    type="date"
+                    value={form.joiningDate}
+                    onChange={event => set('joiningDate', event.target.value)}
+                    required
+                  />
+                </Field>
+
+                {/* 8. Shift */}
+                <Field label="Shift" required>
+                  <select
+                    value={form.shiftId}
+                    onChange={event => set('shiftId', event.target.value)}
+                    required
+                    disabled={!shiftOptions.length}
+                  >
+                    <option value="">
+                      {shiftOptions.length ? 'Select shift' : 'Create a shift in Calendar first'}
+                    </option>
+                    {shiftOptions.map(shift => (
+                      <option value={shift._id} key={shift._id}>
+                        {shift.name} · {shift.startTime}–{shift.endTime}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                {/* 9. Account type */}
+                <Field label="Account type" required>
+                  <select
+                    value={form.employmentType}
+                    onChange={event => {
+                      const value = event.target.value;
+                      setForm(prev => ({
+                        ...prev,
+                        employmentType: value,
+                        internPaymentType: value === 'INTERN' ? prev.internPaymentType : '',
+                        salaryAmount: value === 'INTERN' && prev.internPaymentType === 'UNPAID' ? '0' : prev.salaryAmount
+                      }));
+                    }}
+                  >
+                    <option value="EMPLOYEE">Employee</option>
+                    <option value="INTERN">Intern</option>
+                  </select>
+                  <small>Manager and HR access are assigned through the role selector.</small>
+                </Field>
+
+                {form.employmentType === 'INTERN' && (
+                  <Field label="Intern payment type" required>
+                    <select
+                      value={form.internPaymentType}
+                      onChange={event => {
+                        const value = event.target.value;
+                        setForm(prev => ({
+                          ...prev,
+                          internPaymentType: value,
+                          salaryAmount: value === 'UNPAID' ? '0' : prev.salaryAmount
+                        }));
+                      }}
+                      required
+                    >
+                      <option value="">Select payment type</option>
+                      <option value="PAID">Paid</option>
+                      <option value="UNPAID">Unpaid</option>
+                    </select>
+                    <small>
+                      {form.internPaymentType === 'UNPAID'
+                        ? 'Unpaid interns do not receive a salary.'
+                        : 'Paid interns must have a monthly salary.'}
+                    </small>
+                  </Field>
+                )}
+
+                {/* 10. Department */}
+                <Field label="Department" required>
+                  <select
+                    value={form.departmentId}
+                    onChange={event => {
+                      const departmentId = event.target.value;
+                      if (departmentId === '__CREATE__') {
+                        setShowDeptModal(true);
+                        setDeptError('');
+                        return;
+                      }
+                      setForm(previous => ({
+                        ...previous,
+                        departmentId,
+                        customRoleId: ''
+                      }));
+                    }}
+                    required
+                  >
+                    <option value="">Select department</option>
+                    {departmentOptions.map(department => (
+                      <option value={department._id} key={department._id}>
+                        {department.name}
+                      </option>
+                    ))}
+                    {user.permissions?.includes('department.create') && (
+                      <option value="__CREATE__">➕ Add new department…</option>
+                    )}
+                  </select>
+                </Field>
+
+                {/* 11. Role */}
+                <Field label="Role">
+                  <select
+                    value={form.customRoleId}
+                    onChange={event => set('customRoleId', event.target.value)}
+                    disabled={!form.departmentId || selectedDepartmentRoles.length === 0}
+                  >
+                    <option value="">
+                      {!form.departmentId
+                        ? 'Select a department first'
+                        : selectedDepartmentRoles.length === 0
+                          ? 'No roles in this department'
+                          : 'Employee (no custom role)'}
+                    </option>
+                    {selectedDepartmentRoles.map(role => (
+                      <option value={role._id} key={role._id}>{role.name}</option>
+                    ))}
+                  </select>
+                  <small>
+                    {!form.departmentId
+                      ? 'Choose a department to see its roles.'
+                      : 'Role is the employee\'s job title within this department.'}
+                  </small>
+                </Field>
+
+                {/* 12. Salary */}
+                {!(form.employmentType === 'INTERN' && form.internPaymentType === 'UNPAID') && (
+                  <Field
+                    label="Monthly salary (₹)"
+                    required
+                  >
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.salaryAmount}
+                      onChange={event => set('salaryAmount', event.target.value)}
+                      required
+                    />
+                  </Field>
+                )}
+
+                {form.employmentType === 'INTERN' && form.internPaymentType === 'UNPAID' && (
+                  <div
+                    className="form-tip"
+                    style={{ gridColumn: '1 / -1' }}
+                  >
+                    <AlertCircle size={16} />
+                    Unpaid intern selected — no monthly salary will be recorded.
+                  </div>
+                )}
+
+                {/* 13. Permissions */}
+                <section className="branch-permissions-section" style={{ gridColumn: '1 / -1' }}>
+                  <h3>Employee permissions</h3>
+                  <p>Select the pages and actions this employee needs. Permissions are assigned to this employee, not the role.</p>
+                  <div className="permission-bulk-actions">
+                    <button type="button" onClick={() => {
+                      const available = PERMISSION_OPTIONS
+                        .filter(([permission]) => (user.permissions || []).includes(permission))
+                        .map(([permission]) => permission);
+                      set('permissions', available);
+                    }}>Select all</button>
+                    <button type="button" onClick={() => set('permissions', [])}>Clear all</button>
+                  </div>
+                  <div className="branch-permissions-grid">
+                    {PERMISSION_OPTIONS.filter(([permission]) =>
+                      (user.permissions || []).includes(permission)
+                    ).map(([permission, label]) => (
+                      <label className="branch-permission-option" key={permission}>
+                        <input
+                          type="checkbox"
+                          checked={form.permissions.includes(permission)}
+                          onChange={event => {
+                            const nextPermissions = event.target.checked
+                              ? [...form.permissions, permission]
+                              : form.permissions.filter(item => item !== permission);
+                            set('permissions', nextPermissions);
+                          }}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </section>
+
+                {/* <span>ℹ️</span>
+                <span>
+                  A random password will be auto-generated and emailed to the employee.
+                </span> */}
               </div>
             )}
 

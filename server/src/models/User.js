@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+
 const userSchema = new mongoose.Schema({
   employeeCode: { type: String, trim: true, uppercase: true, unique: true, sparse: true, maxlength: 40 },
   firstName: { type: String, required: true, trim: true, maxlength: 80 },
@@ -27,7 +28,24 @@ const userSchema = new mongoose.Schema({
   archivedAt: { type: Date, default: null },
   joiningDate: { type: Date, default: null },
   tokenVersion: { type: Number, default: 0, min: 0 },
-  lastLoginAt: { type: Date, default: null }
+  lastLoginAt: { type: Date, default: null },
+  // userSchema me add karo (salaryAmount ke aas-paas)
+employmentType: {
+  type: String,
+  enum: ['EMPLOYEE', 'INTERN'],
+  default: 'EMPLOYEE'
+},
+internPaymentType: {
+  type: String,
+  enum: ['PAID', 'UNPAID'],
+  default: null
+},
+
+  // ⬇️ NEW: Password reset fields
+  resetPasswordTokenHash: { type: String, default: null, select: false },
+  resetPasswordExpiresAt: { type: Date, default: null, select: false }
 }, { timestamps: true, versionKey: false });
+
 userSchema.index({ branchId: 1, departmentId: 1, status: 1 });
+
 module.exports = mongoose.model('User', userSchema);

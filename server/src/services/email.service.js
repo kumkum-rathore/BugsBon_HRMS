@@ -127,4 +127,5 @@ async function sendMeetingInvitations(meeting, attendees, organizer) {
   return { sent: attendees.length };
 }
 
+
 module.exports = { sendMeetingInvitations };
