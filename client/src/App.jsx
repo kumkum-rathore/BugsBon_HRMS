@@ -91,6 +91,9 @@ function App() {
   // ✅ NEW: Department-wise role filter (roles page ke liye)
   const [rolesDepartmentFilter, setRolesDepartmentFilter] = useState('');
 
+  // ✅ NEW: Auth view state — login / forgot / reset
+  const [authView, setAuthView] = useState('login');
+
   const notify = useCallback((message, type = 'success') => {
     setNotice({ message, type });
     window.setTimeout(() => setNotice(null), 3600);
@@ -149,6 +152,15 @@ function App() {
     }
   }, [page, notify, user, selectedBranchId, rolesDepartmentFilter]);
 
+  // ✅ NEW: URL से reset-password detect करें (reset link click होने पर)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const path = window.location.pathname;
+    if (path === '/reset-password' || (params.get('token') && path !== '/')) {
+      setAuthView('reset');
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       const session = await restoreSession();
@@ -175,6 +187,7 @@ function App() {
       const data = await login(loginEmail, loginPassword);
       pageHistory.current = [];
       setHistorySize(0);
+      setAuthView('login'); // ✅ reset auth view
       setUser(data.user);
       setPage(data.user.role === 'EMPLOYEE' ? 'tasks' : 'overview');
       notify(`Welcome back, ${data.user.firstName}.`);
@@ -193,14 +206,14 @@ function App() {
     setHistorySize(0);
     setProfileOpen(false);
     setPage('overview');
-    setRolesDepartmentFilter(''); // ✅ reset filter
+    setRolesDepartmentFilter('');
+    setAuthView('login'); // ✅ reset auth view
   }
 
   function navigate(id, { preserveBranchSelection = false, preserveProject = false } = {}) {
     if (id !== page) { pageHistory.current.push(page); setHistorySize(pageHistory.current.length); }
     if (id === 'employees' && user?.role === 'SUPER_ADMIN' && !preserveBranchSelection) setSelectedBranchId('');
     if (id === 'tasks' && !preserveProject) setSelectedProject(null);
-    // ✅ Roles page pe aane pe filter reset karo (agar dusre page se aa rahe ho)
     if (id === 'roles' && page !== 'roles') setRolesDepartmentFilter('');
     setPage(id);
     setMobileOpen(false);
@@ -219,7 +232,26 @@ function App() {
   const profileBranch = branches.find(branch => String(branch._id || branch.id) === String(user?.branchId));
 
   if (booting) return <div className="boot-screen"><div className="brand-mark"><Command size={23}/></div><LoaderCircle className="spin" size={22}/><span>Preparing your workspace</span></div>;
-  if (!user) return <LoginPage email={loginEmail} setEmail={setLoginEmail} password={loginPassword} setPassword={setLoginPassword} onSubmit={submitLogin} busy={loginBusy} notice={notice} />;
+
+  // ✅ NEW: Not logged in — authView के हिसाब से page render करें
+  if (!user) {
+    if (authView === 'forgot') {
+      return <ForgotPasswordPage onBack={() => setAuthView('login')} />;
+    }
+    if (authView === 'reset') {
+      return <ResetPasswordPage />;
+    }
+    return <LoginPage
+      email={loginEmail}
+      setEmail={setLoginEmail}
+      password={loginPassword}
+      setPassword={setLoginPassword}
+      onSubmit={submitLogin}
+      busy={loginBusy}
+      notice={notice}
+      onForgotPassword={() => setAuthView('forgot')}   // ✅ यह ज़रूरी है
+    />;
+  }
 
   return <div className="app-shell">
     {mobileOpen && <button className="mobile-scrim" aria-label="Close menu" onClick={() => setMobileOpen(false)} />}
@@ -266,7 +298,6 @@ function App() {
         {page === 'reviews' && <ReviewsPage reviews={reviews} loading={loading} notify={notify} onRefresh={() => loadData('reviews')} />}
         {page === 'salary' && <SalaryPage salaries={salaries} user={user} loading={loading} notify={notify} employees={employees} onRefresh={() => loadData('salary')} />}
         {page === 'departments' && <DepartmentsPage rows={departments} user={user} loading={loading} notify={notify} onRefresh={() => loadData('departments')} />}
-        {/* ✅ RolesPage ko onFilterChange prop pass karo */}
         {page === 'roles' && <RolesPage rows={roles} employees={employees} user={user} loading={loading} notify={notify} onRefresh={() => loadData('roles')} onFilterChange={setRolesDepartmentFilter} />}
         {page === 'documents' && <DocumentsPage documents={documents} user={user} loading={loading} notify={notify} onRefresh={() => loadData('documents')} />}
         {page === 'settings' && <SettingsPage user={user} notify={notify} />}
